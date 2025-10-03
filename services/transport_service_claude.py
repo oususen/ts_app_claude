@@ -74,10 +74,10 @@ class TransportService:
         
         loading_items = [LoadingItem(**item) for item in items]
         return self.validator.validate_loading(loading_items, containers, truck_row.iloc[0])
-# app/services/transport_service.py
+    
     def calculate_loading_plan_from_orders(self, 
-                                        start_date: date, 
-                                        days: int = 7) -> Dict[str, Any]:
+                                          start_date: date, 
+                                          days: int = 7) -> Dict[str, Any]:
         """
         オーダー情報から積載計画を自動作成
         
@@ -89,63 +89,14 @@ class TransportService:
             日別積載計画
         """
         
-        try:
-            # データ取得
-            end_date = start_date + timedelta(days=days - 1)
-            
-            # production_repository経由でオーダー取得
-            orders_df = self.production_repo.get_production_instructions(start_date, end_date)
-            
-            # ✅ 安全な空チェック
-            if orders_df is None or (hasattr(orders_df, 'empty') and orders_df.empty):
-                return {
-                    'daily_plans': {},
-                    'summary': {
-                        'total_days': days,
-                        'total_trips': 0,
-                        'total_warnings': 0,
-                        'unloaded_count': 0,
-                        'status': 'データなし'
-                    },
-                    'unloaded_tasks': [],
-                    'period': f"{start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}"
-                }
-            
-            products_df = self.product_repo.get_all_products()
-            containers = self.get_containers()
-            trucks_df = self.get_trucks()
-            truck_container_rules = self.transport_repo.get_truck_container_rules()
-            
-            # ✅ 他のデータもNoneチェック
-            if products_df is None or containers is None or trucks_df is None:
-                return {
-                    'daily_plans': {},
-                    'summary': {
-                        'total_days': days,
-                        'total_trips': 0,
-                        'total_warnings': 0,
-                        'unloaded_count': 0,
-                        'status': 'データ取得エラー'
-                    },
-                    'unloaded_tasks': [],
-                    'period': f"{start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}"
-                }
-            
-            # 積載計画計算
-            result = self.planner.calculate_loading_plan_from_orders(
-                orders_df=orders_df,
-                products_df=products_df,
-                containers=containers,
-                trucks_df=trucks_df,
-                truck_container_rules=truck_container_rules,
-                start_date=start_date,
-                days=days
-            )
-            
-            return result
-            
-        except Exception as e:
-            print(f"積載計画計算エラー: {e}")
+        # データ取得
+        end_date = start_date + timedelta(days=days - 1)
+        
+        # production_repository経由でオーダー取得
+        orders_df = self.production_repo.get_production_instructions(start_date, end_date)
+        
+        # データ確認
+        if orders_df.empty:
             return {
                 'daily_plans': {},
                 'summary': {
@@ -153,12 +104,29 @@ class TransportService:
                     'total_trips': 0,
                     'total_warnings': 0,
                     'unloaded_count': 0,
-                    'status': f'計算エラー: {str(e)}'
+                    'status': '正常'
                 },
                 'unloaded_tasks': [],
                 'period': f"{start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}"
-            }    
-
+            }
+        
+        products_df = self.product_repo.get_all_products()
+        containers = self.get_containers()
+        trucks_df = self.get_trucks()
+        truck_container_rules = self.transport_repo.get_truck_container_rules()
+        
+        # 積載計画計算
+        result = self.planner.calculate_loading_plan_from_orders(
+            orders_df=orders_df,
+            products_df=products_df,
+            containers=containers,
+            trucks_df=trucks_df,
+            truck_container_rules=truck_container_rules,
+            start_date=start_date,
+            days=days
+        )
+        
+        return result
     
     def save_loading_plan(self, plan_result: Dict[str, Any], plan_name: str = None) -> int:
         """積載計画をDBに保存"""

@@ -233,3 +233,6 @@ class FormComponents:
                 }
             
             return None
+# app/ui/components/forms.py に以下のメソッドを追加
+
+# (No duplicate or misaligned product_form method here; keep only the previous correct implementation.)

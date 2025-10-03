@@ -57,11 +57,7 @@ class ProductionPlan:
 
 @dataclass
 class ProductionConstraint:
-    """生産制約モデル - production_constraintsテーブル構造に合わせる
-    
-    注意: このクラスはproduct.pyのProductConstraintと統合すべき
-    現状は互換性のため残している
-    """
+    """生産制約モデル - production_constraintsテーブル構造に合わせる"""
     product_id: int
     id: Optional[int] = None
     daily_capacity: Optional[int] = None

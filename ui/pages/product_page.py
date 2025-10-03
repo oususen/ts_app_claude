@@ -143,8 +143,8 @@ class ProductPage:
                             )
                             new_inspection_category = st.selectbox(
                                 "検査区分",
-                                options=['N', 'NS', 'FS', 'F', 'その他'],
-                                index=['N', 'NS', 'FS', 'F', 'その他'].index(product.inspection_category) if product.inspection_category in ['N', 'NS', 'FS', 'F', 'その他'] else 0,
+                                options=['A', 'B', 'C', 'その他'],
+                                index=['A', 'B', 'C', 'その他'].index(product.inspection_category) if product.inspection_category in ['A', 'B', 'C', 'その他'] else 0,
                                 key=f"inspection_{product.id}"
                             )
                             
@@ -255,8 +255,8 @@ class ProductPage:
                 can_advance_count = sum(1 for p in products if getattr(p, 'can_advance', False))
                 st.metric("前倒可能製品", can_advance_count)
             with col3:
-                a_count = sum(1 for p in products if p.inspection_category == 'N')
-                st.metric("検査区分N", a_count)
+                a_count = sum(1 for p in products if p.inspection_category == 'A')
+                st.metric("検査区分A", a_count)
             with col4:
                 avg_capacity = sum(p.capacity or 0 for p in products) / len(products) if products else 0
                 st.metric("平均入り数", f"{avg_capacity:.0f}")
