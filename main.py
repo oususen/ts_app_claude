@@ -1,6 +1,4 @@
 # app/main.py
-
-
 import streamlit as st
 from repository.database_manager import DatabaseManager
 from services.production_service import ProductionService
@@ -8,9 +6,11 @@ from services.transport_service import TransportService
 from ui.layouts.sidebar import create_sidebar
 from ui.pages.dashboard_page import DashboardPage
 from ui.pages.constraints_page import ConstraintsPage
+from ui.pages.product_page import ProductPage  # 追加
 from ui.pages.production_page import ProductionPage
 from ui.pages.transport_page import TransportPage
 from config import APP_CONFIG
+
 class ProductionPlanningApp:
     """生産計画アプリケーション - メイン制御クラス"""
     
@@ -25,6 +25,7 @@ class ProductionPlanningApp:
         # ページ初期化
         self.pages = {
             "ダッシュボード": DashboardPage(self.production_service),
+            "製品管理": ProductPage(self.production_service, self.transport_service),  # 追加
             "制限設定": ConstraintsPage(self.production_service),
             "生産計画": ProductionPage(self.production_service),
             "配送便計画": TransportPage(self.transport_service)

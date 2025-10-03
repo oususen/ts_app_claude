@@ -131,4 +131,105 @@ class FormComponents:
         
         return None    
    
-           
+# app/ui/components/forms.py に以下のメソッドを追加
+
+    
+    @staticmethod
+    def product_form(containers=None, trucks_df=None) -> dict:
+        """製品登録フォーム - DB構造に完全対応"""
+        with st.form("product_form", clear_on_submit=True):
+            st.write("**新規製品情報**")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**基本情報**")
+                product_code = st.text_input("製品コード *", placeholder="例: P001")
+                product_name = st.text_input("製品名 *", placeholder="例: 製品A")
+                capacity = st.number_input("入り数 *", min_value=0, value=0, step=1)
+                inspection_category = st.selectbox(
+                    "検査区分",
+                    options=['N', 'NS', 'FS', 'F', 'その他'],
+                    index=0
+                )
+                lead_time = st.number_input("リードタイム (日)", min_value=0, value=0, step=1)
+                fixed_point_days = st.number_input("固定日数 (日)", min_value=0, value=0, step=1)
+            
+            with col2:
+                st.write("**容器・トラック設定**")
+                
+                # 使用容器選択
+                if containers:
+                    container_options = {c.name: c.id for c in containers}
+                    selected_container = st.selectbox(
+                        "使用容器 *",
+                        options=['未設定'] + list(container_options.keys())
+                    )
+                    used_container_id = container_options.get(selected_container) if selected_container != '未設定' else None
+                else:
+                    used_container_id = None
+                    st.info("容器が登録されていません")
+                
+                # 使用トラック選択（複数選択）
+                if trucks_df is not None and not trucks_df.empty:
+                    truck_options = dict(zip(trucks_df['name'], trucks_df['id']))
+                    selected_trucks = st.multiselect(
+                        "使用トラック（複数選択可）",
+                        options=list(truck_options.keys()),
+                        help="この製品を運ぶトラックを選択してください"
+                    )
+                    selected_truck_ids = [truck_options[name] for name in selected_trucks]
+                    used_truck_ids = ','.join(map(str, selected_truck_ids)) if selected_truck_ids else None
+                else:
+                    used_truck_ids = None
+                    st.info("トラックが登録されていません")
+                
+                can_advance = st.checkbox("前倒可 (平準化対象)", value=False, 
+                                        help="需要平準化の対象製品にする場合はチェック")
+            
+            submitted = st.form_submit_button("➕ 製品を登録", type="primary")
+            
+            if submitted:
+                if not product_code or not product_name:
+                    st.error("製品コードと製品名は必須です")
+                    return None
+                
+                return {
+                    "product_code": product_code,
+                    "product_name": product_name,
+                    "capacity": capacity,
+                    "inspection_category": inspection_category,
+                    "used_container_id": used_container_id,
+                    "lead_time": lead_time,
+                    "fixed_point_days": fixed_point_days,
+                    "can_advance": can_advance,
+                    "used_truck_ids": used_truck_ids,
+                    # その他のフィールドはNone/デフォルト値
+                    "data_no": None,
+                    "factory": None,
+                    "client_code": None,
+                    "calculation_date": None,
+                    "production_complete_date": None,
+                    "modified_factory": None,
+                    "product_category": None,
+                    "ac_code": None,
+                    "processing_content": None,
+                    "delivery_location": None,
+                    "box_type": None,
+                    "grouping_category": None,
+                    "form_category": None,
+                    "ordering_category": None,
+                    "regular_replenishment_category": None,
+                    "shipping_factory": None,
+                    "client_product_code": None,
+                    "purchasing_org": None,
+                    "item_group": None,
+                    "processing_type": None,
+                    "inventory_transfer_category": None,
+                    "container_width": None,
+                    "container_depth": None,
+                    "container_height": None,
+                    "stackable": True
+                }
+            
+            return None
