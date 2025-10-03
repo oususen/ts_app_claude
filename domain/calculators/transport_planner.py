@@ -150,7 +150,7 @@ class TransportPlanner:
                     })
         
         return dict(daily_tasks)
-    
+   
     def _plan_single_day(self, tasks, container_map, truck_map, 
                         truck_container_rules) -> Tuple[Dict, List]:
         """1日分の積載計画を作成"""

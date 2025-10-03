@@ -159,18 +159,51 @@ class TransportRepository:
             return False
         finally:
             session.close()
+# app/repository/transport_repository.py の get_truck_container_rules メソッド
 
     def get_truck_container_rules(self):
-        session = self.db_manager.get_session()
+        """トラック×容器ルールを取得 - 安全な実装"""
         try:
-            return session.query(TruckContainerRule).order_by(
-                TruckContainerRule.truck_id, TruckContainerRule.priority
-            ).all()
-        except SQLAlchemyError as e:
-            print(f"TruckContainerRule取得エラー: {e}")
-            return []
-        finally:
-            session.close()
+            query = """
+            SELECT 
+                id, truck_id, container_id, max_quantity, created_at
+            FROM truck_container_rules
+            ORDER BY truck_id, container_id
+            """
+            
+            result = self.db.execute_query(query)
+            
+            if result.empty:
+                print("⚠️ 警告: トラック容器ルールが0件")
+                return []
+            
+            # ✅ 単純な辞書のリストとして返す
+            rules = []
+            for _, row in result.iterrows():
+                rules.append({
+                    'id': row['id'],
+                    'truck_id': row['truck_id'],
+                    'container_id': row['container_id'],
+                    'max_quantity': row['max_quantity']
+                })
+            
+            print(f"✅ デバッグ: {len(rules)}件のトラック容器ルールを取得")
+            return rules
+            
+        except Exception as e:
+            print(f"❌ トラック容器ルール取得エラー: {e}")
+            return []  # エラー時は空リストを返す
+    # def get_truck_container_rules(self):
+    #     session = self.db_manager.get_session()
+    #     try:
+    #         return session.query(TruckContainerRule).order_by(
+    #             TruckContainerRule.truck_id, TruckContainerRule.priority
+    #         ).all()
+    #     except SQLAlchemyError as e:
+    #         print(f"TruckContainerRule取得エラー: {e}")
+    #         return []
+    #     finally:
+    #         session.close()
 
     def save_truck_container_rule(self, rule_data: dict) -> bool:
         session = self.db_manager.get_session()

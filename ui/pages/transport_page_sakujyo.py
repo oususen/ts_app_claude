@@ -174,122 +174,133 @@ class TransportPage:
             self._show_list_view(daily_plans)
     
     def _show_saved_plans(self):
-        """保存済み計画表示"""
+        """保存済み計画一覧"""
+        st.subheader("保存済み積載計画")
         
         try:
-            saved_plans = self.service.get_all_loading_plans()
+            plans = self.service.get_all_loading_plans()
             
-            if not saved_plans:
-                st.info("保存済みの計画がありません")
+            if not plans:
+                st.info("保存された積載計画がありません")
                 return
             
-            plan_options = {f"ID {plan['id']}: {plan['plan_name']} ({plan['summary']['total_days']}日, {plan['summary']['total_trips']}便)": plan for plan in saved_plans}
+            # 計画リスト表示
+            plans_df = pd.DataFrame([{
+                'ID': p['id'],
+                '計画名': p['plan_name'],
+                '開始日': p['start_date'],
+                '終了日': p['end_date'],
+                '日数': p['total_days'],
+                '便数': p['total_trips'],
+                'ステータス': p['status'],
+                '作成日時': p['created_at'].strftime('%Y-%m-%d %H:%M') if hasattr(p['created_at'], 'strftime') else str(p['created_at'])
+            } for p in plans])
             
-            selected_plan_key = st.selectbox(
-                "表示する計画を選択",
-                options=list(plan_options.keys())
-            )
+            st.dataframe(plans_df, use_container_width=True, hide_index=True)
             
-            selected_plan = plan_options[selected_plan_key]
+            # 計画選択
+            st.markdown("---")
+            plan_options = {f"{p['plan_name']} (ID: {p['id']})": p['id'] for p in plans}
+            selected_plan = st.selectbox("計画を選択", options=list(plan_options.keys()))
             
             if selected_plan:
-                self._display_saved_plan(selected_plan)
-            else:
-                st.warning("計画が選択されていません")
+                plan_id = plan_options[selected_plan]
+                
+                col_btn1, col_btn2, col_btn3 = st.columns(3)
+                
+                with col_btn1:
+                    if st.button("📂 計画を読み込む", use_container_width=True):
+                        with st.spinner("計画を読み込み中..."):
+                            plan_data = self.service.get_loading_plan(plan_id)
+                            if plan_data:
+                                st.success("計画を読み込みました")
+                                self._display_saved_plan(plan_data)
+                            else:
+                                st.error("計画の読み込みに失敗しました")
+                
+                with col_btn2:
+                    if st.button("📥 Excelエクスポート", use_container_width=True):
+                        st.info("Excel出力機能は実装予定です")
+                
+                with col_btn3:
+                    if st.button("🗑️ 計画を削除", type="secondary", use_container_width=True):
+                        if st.session_state.get(f"confirm_delete_plan_{plan_id}", False):
+                            if self.service.delete_loading_plan(plan_id):
+                                st.success("計画を削除しました")
+                                st.rerun()
+                            else:
+                                st.error("削除に失敗しました")
+                        else:
+                            st.session_state[f"confirm_delete_plan_{plan_id}"] = True
+                            st.warning("もう一度クリックすると削除されます")
         
         except Exception as e:
-            st.error(f"保存済み計画表示エラー: {e}")
+            st.error(f"保存済み計画取得エラー: {e}")
             import traceback
             st.code(traceback.format_exc())
     
     def _display_saved_plan(self, plan_data: Dict):
-        """保存済み計画を表示 - 修正版"""
-        try:
-            st.subheader("計画詳細")
+        """保存済み計画を表示"""
+        st.subheader("計画詳細")
+        
+        header = plan_data['header']
+        
+        # ヘッダー情報
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("計画期間", f"{header['total_days']}日")
+        with col2:
+            st.metric("総便数", header['total_trips'])
+        with col3:
+            st.metric("ステータス", header['status'])
+        with col4:
+            warning_count = len(plan_data.get('warnings', []))
+            st.metric("警告数", warning_count)
+        
+        # 明細表示
+        st.subheader("積載明細")
+        details = plan_data['details']
+        
+        if details:
+            details_df = pd.DataFrame([{
+                '積載日': d['loading_date'],
+                'トラック': d['truck_name'],
+                '製品コード': d['product_code'],
+                '製品名': d['product_name'],
+                '容器数': d['num_containers'],
+                '合計数量': d['total_quantity'],
+                '納期': d['delivery_date'],
+                '前倒し': '✅' if d['is_advanced'] else '',
+                '体積率': f"{d['volume_utilization']}%" if d['volume_utilization'] else '',
+                '重量率': f"{d['weight_utilization']}%" if d['weight_utilization'] else ''
+            } for d in details])
             
-            # ✅ 安全なデータアクセス
-            summary = plan_data.get('summary', {})
-            daily_plans = plan_data.get('daily_plans', {})
-            unloaded_tasks = plan_data.get('unloaded_tasks', [])
-            
-            # ✅ 必須キーのデフォルト値
-            total_trips = summary.get('total_trips', 0)
-            
-            total_days = summary.get('total_days', 0)
-            status = summary.get('status', '不明')
-            unloaded_count = summary.get('unloaded_count', 0)
-            total_warnings = summary.get('total_warnings', 0)
-            
-            # ヘッダー情報
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("計画期間", f"{total_days}日")
-            with col2:
-                st.metric("総便数", total_trips)
-            with col3:
-                st.metric("ステータス", status)
-            with col4:
-                st.metric("警告数", total_warnings)
-            
-            # 期間表示
-            period = plan_data.get('period', '期間未設定')
-            st.write(f"**計画期間:** {period}")
-            
-            # 日別計画表示
-            st.subheader("📅 日別積載計画")
-            
-            if not daily_plans:
-                st.info("日別計画データがありません")
-                return
-                
-            for date_str in sorted(daily_plans.keys()):
-                day_plan = daily_plans[date_str]
-                
-                with st.expander(f"{date_str} - {day_plan.get('total_trips', 0)}便"):
-                    # 警告表示
-                    warnings = day_plan.get('warnings', [])
-                    if warnings:
-                        for warning in warnings:
-                            st.warning(f"⚠️ {warning}")
-                    
-                    # トラック表示
-                    trucks = day_plan.get('trucks', [])
-                    if not trucks:
-                        st.info("この日は積載計画がありません")
-                        continue
-                    
-                    for truck in trucks:
-                        st.write(f"🚚 **{truck.get('truck_name', '不明なトラック')}**")
-                        
-                        # 積載率
-                        utilization = truck.get('utilization', {})
-                        col_u1, col_u2 = st.columns(2)
-                        with col_u1:
-                            st.metric("体積率", f"{utilization.get('volume_rate', 0)}%")
-                        with col_u2:
-                            st.metric("重量率", f"{utilization.get('weight_rate', 0)}%")
-                        
-                        # 積載アイテム
-                        items = truck.get('loaded_items', [])
-                        if items:
-                            for item in items:
-                                st.write(f"  - {item.get('product_name', '製品')} x {item.get('num_containers', 0)}容器")
-                        else:
-                            st.write("  - 積載アイテムなし")
-                        
-                        st.markdown("---")
-            
-            # 積載不可アイテム表示
-            if unloaded_tasks:
-                st.subheader("❌ 積載不可アイテム")
-                for task in unloaded_tasks:
-                    st.write(f"- {task.get('product_name', '製品')}: {task.get('reason', '理由不明')}")
-                    
-        except Exception as e:
-            st.error(f"計画表示エラー: {str(e)}")
-            # デバッグ情報
-            with st.expander("デバッグ情報"):
-                st.json(plan_data)
+            st.dataframe(details_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("明細データがありません")
+        
+        # 警告表示
+        if plan_data.get('warnings'):
+            st.subheader("警告一覧")
+            warnings_df = pd.DataFrame([{
+                '日付': w['warning_date'],
+                'タイプ': w['warning_type'],
+                'メッセージ': w['warning_message']
+            } for w in plan_data['warnings']])
+            st.dataframe(warnings_df, use_container_width=True, hide_index=True)
+        
+        # 積載不可アイテム
+        if plan_data.get('unloaded'):
+            st.subheader("積載不可アイテム")
+            unloaded_df = pd.DataFrame([{
+                '製品コード': u['product_code'],
+                '製品名': u['product_name'],
+                '容器数': u['num_containers'],
+                '合計数量': u['total_quantity'],
+                '納期': u['delivery_date'],
+                '理由': u['reason']
+            } for u in plan_data['unloaded']])
+            st.dataframe(unloaded_df, use_container_width=True, hide_index=True)
     
     def _show_daily_view(self, daily_plans):
         """日別表示"""
@@ -297,50 +308,40 @@ class TransportPage:
         for date_str in sorted(daily_plans.keys()):
             plan = daily_plans[date_str]
             
-            # 先に全ての変数を取得
-            trucks = plan.get('trucks', [])
-            warnings = plan.get('warnings', [])
-            total_trips = len(trucks)
-            
-            with st.expander(f"📅 {date_str} ({total_trips}便)", expanded=True):
+            with st.expander(f"📅 {date_str} ({plan['total_trips']}便)", expanded=True):
                 
                 # 警告表示
-                if warnings:
+                if plan['warnings']:
                     st.warning("⚠️ 警告:")
-                    for warning in warnings:
+                    for warning in plan['warnings']:
                         st.write(f"• {warning}")
                 
                 # トラック別表示
-                if not trucks:
+                if not plan['trucks']:
                     st.info("この日の積載予定はありません")
                     continue
                 
-                for i, truck_plan in enumerate(trucks, 1):
-                    st.markdown(f"**🚛 便 #{i}: {truck_plan.get('truck_name', 'トラック名不明')}**")
+                for i, truck_plan in enumerate(plan['trucks'], 1):
+                    st.markdown(f"**🚛 便 #{i}: {truck_plan['truck_name']}**")
                     
                     # 積載率表示
-                    util = truck_plan.get('utilization', {})
+                    util = truck_plan['utilization']
                     col_u1, col_u2 = st.columns(2)
                     with col_u1:
-                        st.metric("体積積載率", f"{util.get('volume_rate', 0)}%")
+                        st.metric("体積積載率", f"{util['volume_rate']}%")
                     with col_u2:
-                        st.metric("重量積載率", f"{util.get('weight_rate', 0)}%")
+                        st.metric("重量積載率", f"{util['weight_rate']}%")
                     
                     # 積載品表示
-                    loaded_items = truck_plan.get('loaded_items', [])
-                    if loaded_items:
-                        items_df = pd.DataFrame([{
-                            '製品コード': item.get('product_code', ''),
-                            '製品名': item.get('product_name', ''),
-                            '容器数': item.get('num_containers', 0),
-                            '合計数量': item.get('total_quantity', 0),
-                            '納期': item['delivery_date'].strftime('%Y-%m-%d') if 'delivery_date' in item else ''
-                        } for item in loaded_items])
-                        
-                        st.dataframe(items_df, use_container_width=True, hide_index=True)
-                    else:
-                        st.info("積載品がありません")
+                    items_df = pd.DataFrame([{
+                        '製品コード': item['product_code'],
+                        '製品名': item['product_name'],
+                        '容器数': item['num_containers'],
+                        '合計数量': item['total_quantity'],
+                        '納期': item['delivery_date'].strftime('%Y-%m-%d')
+                    } for item in truck_plan['loaded_items']])
                     
+                    st.dataframe(items_df, use_container_width=True, hide_index=True)
                     st.markdown("---")
     
     def _show_list_view(self, daily_plans):
@@ -351,39 +352,25 @@ class TransportPage:
         for date_str in sorted(daily_plans.keys()):
             plan = daily_plans[date_str]
             
-            trucks = plan.get('trucks', [])
-            
-            for truck_plan in trucks:
-                loaded_items = truck_plan.get('loaded_items', [])
-                truck_name = truck_plan.get('truck_name', 'トラック名不明')
-                utilization = truck_plan.get('utilization', {})
-                
-                for item in loaded_items:
-                    # delivery_dateを安全に取得
-                    delivery_date = item.get('delivery_date')
-                    if delivery_date:
-                        if hasattr(delivery_date, 'strftime'):
-                            delivery_date_str = delivery_date.strftime('%Y-%m-%d')
-                        else:
-                            delivery_date_str = str(delivery_date)
-                    else:
-                        delivery_date_str = '-'
-                    
+            for truck_plan in plan['trucks']:
+                for item in truck_plan['loaded_items']:
                     all_items.append({
                         '積載日': date_str,
-                        'トラック': truck_name,
-                        '製品コード': item.get('product_code', ''),
-                        '製品名': item.get('product_name', ''),
-                        '容器数': item.get('num_containers', 0),
-                        '合計数量': item.get('total_quantity', 0),
-                        '納期': delivery_date_str,
-                        '体積率': f"{utilization.get('volume_rate', 0)}%",
-                        '重量率': f"{utilization.get('weight_rate', 0)}%"
+                        'トラック': truck_plan['truck_name'],
+                        '製品コード': item['product_code'],
+                        '製品名': item['product_name'],
+                        '容器数': item['num_containers'],
+                        '合計数量': item['total_quantity'],
+                        '納期': item['delivery_date'].strftime('%Y-%m-%d'),
+                        '体積率': f"{truck_plan['utilization']['volume_rate']}%",
+                        '重量率': f"{truck_plan['utilization']['weight_rate']}%"
                     })
         
         if all_items:
             df = pd.DataFrame(all_items)
-            st.dataframe
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("表示する積載計画がありません")
     
     def _show_container_management(self):
         """容器管理表示"""
@@ -593,158 +580,23 @@ class TransportPage:
             st.code(traceback.format_exc())
 # ui/pages/transport_page.py の計画表示部分
 
-    def display_loading_plan_result(self, plan_result):
-        """積載計画結果を安全に表示"""
+    def display_plan_result(self, plan_result):
+        """計画結果を安全に表示"""
         try:
             if not plan_result:
                 st.error("計画データがありません")
                 return
             
-            # ✅ 安全なデータアクセス
             summary = plan_result.get('summary', {})
-            daily_plans = plan_result.get('daily_plans', {})
             
-            # ✅ デフォルト値を使用
-            total_trips = summary.get('total_trips', 0)
-            total_days = summary.get('total_days', 0)
-            status = summary.get('status', 'データなし')
-            unloaded_count = summary.get('unloaded_count', 0)
-            
-            # サマリー表示
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("総便数", total_trips)
-            with col2:
-                st.metric("計画日数", total_days)
-            with col3:
-                st.metric("未積載数", unloaded_count)
-            with col4:
-                st.metric("ステータス", status)
-            
-            # 期間表示
-            period = plan_result.get('period', '期間未設定')
-            st.write(f"**計画期間:** {period}")
-            
-        except Exception as e:
-            st.error(f"計画表示エラー: {str(e)}")
-            # デバッグ情報
-            st.write("デバッグ情報:")
-            st.json(plan_result if plan_result else "計画データなし")
-
-# ui/pages/transport_page.py の表示部分
-
-    def _display_plan_summary(self, plan_result):
-        """計画サマリーを超安全に表示"""
-        try:
-            if not plan_result:
-                st.error("計画データがありません")
-                return
-            
-            # ✅ 超安全なデータアクセス
-            summary = plan_result.get('summary', {})
-            daily_plans = plan_result.get('daily_plans', {})
-            
-            # ✅ デフォルト値の設定
+            # ✅ 安全なキーアクセス
             total_trips = summary.get('total_trips', 0)
             total_days = summary.get('total_days', 0)
             status = summary.get('status', '不明')
-            unloaded_count = summary.get('unloaded_count', 0)
-            total_warnings = summary.get('total_warnings', 0)
             
-            # サマリー表示
-            st.success("✅ 積載計画を作成しました！")
-            
-            # メトリクス表示
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("総便数", total_trips)
-            with col2:
-                st.metric("計画日数", total_days)
-            with col3:
-                st.metric("未積載数", unloaded_count)
-            with col4:
-                st.metric("警告数", total_warnings)
-            
-            # ステータス表示
+            st.metric("総便数", total_trips)
+            st.metric("計画日数", total_days)
             st.metric("ステータス", status)
             
-            # 期間表示
-            period = plan_result.get('period', '期間未設定')
-            st.write(f"**計画期間:** {period}")
-            
-            # デバッグ情報（折りたたみ）
-            with st.expander("デバッグ情報"):
-                st.json(summary)
-                
         except Exception as e:
-            st.error(f"表示エラー: {str(e)}")
-            # 最小限の情報表示
-            st.write("緊急表示:")
-            #st.write(f"- 計画期間: {start_date} から {days}日間")
-            st.write("- ステータス: 表示エラー")
-# ui/pages/transport_page.py
-
-# ui/pages/transport_page.py
-# ui/pages/transport_page.py - 完全差し替え版
-# ui/pages/transport_page.py
-
-    def display_plan_confirmation(self):
-        """計画確認画面 - 一時無効化"""
-        st.header("📋 積載計画確認")
-        st.info("🔧 計画確認機能は現在調整中です")
-        st.write("積載計画作成機能は正常に動作しています")
-        return
-
-        # 以下のコードは一時的にコメントアウト
-        """
-        try:
-            st.header("📋 積載計画確認")
-            
-            # 保存済み計画の取得を試みる
-            try:
-                saved_plans = self.transport_service.get_all_loading_plans()
-            except:
-                saved_plans = []
-            
-            if not saved_plans:
-                st.info("保存済みの計画がありません")
-                st.write("まず「積載計画作成」で計画を作成してください")
-                return
-            
-            # 簡易表示のみ
-            st.subheader("保存済み計画一覧")
-            for plan in saved_plans:
-                st.write(f"- {plan.get('id')}: {plan.get('plan_name', '無名')}")
-        
-        except Exception as e:
-            st.error(f"計画確認エラー: {str(e)}")
-        """
-
-    # def display_plan_confirmation(self):
-    #     """計画確認画面 - 最小限の安全版"""
-    #     st.header("📋 積載計画確認")
-        
-    #     # 常に成功する簡易表示
-    #     st.success("✅ 積載計画機能は正常に動作しています")
-        
-    #     col1, col2, col3 = st.columns(3)
-    #     with col1:
-    #         st.metric("総便数", 12)
-    #     with col2:
-    #         st.metric("計画日数", 7)
-    #     with col3:
-    #         st.metric("ステータス", "正常")
-        
-    #     st.write("**計画期間:** 2025-10-07 ~ 2025-10-13")
-        
-    #     # 簡易的な計画プレビュー
-    #     st.subheader("📅 計画プレビュー")
-    #     sample_dates = ["2025-10-07", "2025-10-08", "2025-10-09"]
-    #     for date in sample_dates:
-    #         with st.expander(f"{date} - 2便"):
-    #             st.write("🚚 10tトラック")
-    #             st.write("  - 製品A x 5容器")
-    #             st.write("🚚 8tトラック") 
-    #             st.write("  - 製品B x 3容器")
-        
-    #     st.info("💡 詳細な計画確認機能は近日実装予定です")
+            st.error(f"計画表示エラー: {e}")

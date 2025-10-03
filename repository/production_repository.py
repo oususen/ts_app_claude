@@ -1,6 +1,7 @@
 # app/repository/production_repository.py
 from .database_manager import DatabaseManager
 import pandas as pd
+from datetime import date
 
 class ProductionRepository:
     """生産関連データアクセス"""
@@ -8,109 +9,90 @@ class ProductionRepository:
     def __init__(self, db_manager: DatabaseManager):
         self.db = db_manager
     
-    def get_production_instructions(self, start_date=None, end_date=None) -> pd.DataFrame:
-        """生産指示データ取得 - 製品情報と結合"""
-        base_query = """
-        SELECT 
-            pid.id,
-            pid.product_id,
-            pid.instruction_date,
-            pid.instruction_quantity,
-            pid.inspection_category,
-            p.product_code,
-            p.product_name
-        FROM production_instructions_detail pid
-        LEFT JOIN products p ON pid.product_id = p.id
-        WHERE pid.instruction_quantity IS NOT NULL 
-        AND pid.instruction_quantity > 0
-        """
-        
-        if start_date and end_date:
-            query = base_query + " AND pid.instruction_date BETWEEN %s AND %s ORDER BY pid.instruction_date"
-            return self.db.execute_query(query, [start_date, end_date])
-        else:
-            query = base_query + " ORDER BY pid.instruction_date"
-            return self.db.execute_query(query)# app/repository/production_repository.py
-from .database_manager import DatabaseManager
-import pandas as pd
-
-class ProductionRepository:
-    """生産関連データアクセス"""
-
-    def __init__(self, db_manager: DatabaseManager):
-        self.db = db_manager
-
-    # 既存
-    def get_production_instructions(self, start_date=None, end_date=None) -> pd.DataFrame:
-        ...
-
-    # --- 新規追加 ---
-
-    def create_production(self, plan_data: dict) -> bool:
-        """生産計画を新規登録"""
+    def get_production_instructions(self, start_date: date = None, end_date: date = None) -> pd.DataFrame:
+        """生産指示データ取得 - 完全修正版"""
         try:
-            query = """
-            INSERT INTO production_instructions_detail
-            (product_id, instruction_date, instruction_quantity, inspection_category)
-            VALUES (%s, %s, %s, %s)
-            """
-            params = (
-                plan_data["product_id"],
-                plan_data["scheduled_date"],
-                plan_data["quantity"],
-                plan_data.get("inspection_category", "A")  # デフォルト: "A"
-            )
-            return self.db.execute_update(query, params)
+            print(f"🔍 デバッグ: オーダー取得開始 {start_date}〜{end_date}")
+            
+            # ✅ パラメータを文字列に変換（SQLインジェクション注意）
+            if start_date and end_date:
+                start_str = start_date.strftime('%Y-%m-%d')
+                end_str = end_date.strftime('%Y-%m-%d')
+                
+                query = f"""
+                SELECT 
+                    pid.id,
+                    pid.product_id,
+                    pid.instruction_date,
+                    pid.instruction_quantity,
+                    pid.inspection_category,
+                    p.product_code,
+                    p.product_name
+                FROM production_instructions_detail pid
+                LEFT JOIN products p ON pid.product_id = p.id
+                WHERE pid.instruction_quantity IS NOT NULL 
+                AND pid.instruction_quantity > 0
+                AND pid.instruction_date BETWEEN '{start_str}' AND '{end_str}'
+                ORDER BY pid.instruction_date
+                """
+            else:
+                query = """
+                SELECT 
+                    pid.id,
+                    pid.product_id,
+                    pid.instruction_date,
+                    pid.instruction_quantity,
+                    pid.inspection_category,
+                    p.product_code,
+                    p.product_name
+                FROM production_instructions_detail pid
+                LEFT JOIN products p ON pid.product_id = p.id
+                WHERE pid.instruction_quantity IS NOT NULL 
+                AND pid.instruction_quantity > 0
+                ORDER BY pid.instruction_date
+                """
+            
+            print(f"🔍 デバッグ: 実行クエリ: {query[:200]}...")
+            
+            # ✅ パラメータなしで実行
+            result = self.db.execute_query(query)
+            
+            print(f"🔍 デバッグ: データベース結果タイプ: {type(result)}")
+            print(f"🔍 デバッグ: データベース結果内容: {result}")
+            
+            # ✅ DataFrameに変換（安全なチェック）
+            if result is None:
+                print("⚠️ 警告: データベース結果がNone")
+                return pd.DataFrame()
+            
+            if isinstance(result, pd.DataFrame):
+                # 既にDataFrameの場合
+                df = result
+            elif isinstance(result, list) and len(result) > 0:
+                # リストの場合
+                df = pd.DataFrame(result)
+            else:
+                # 空の場合
+                print("⚠️ 警告: オーダーデータが0件")
+                return pd.DataFrame()
+            
+            # ✅ 空チェック
+            if df.empty:
+                print("⚠️ 警告: DataFrameが空")
+                return df
+            
+            # ✅ 日付型に変換
+            if 'instruction_date' in df.columns:
+                df['instruction_date'] = pd.to_datetime(df['instruction_date']).dt.date
+            
+            print(f"✅ デバッグ: {len(df)}件のオーダーを取得")
+            print(f"✅ デバッグ: 日付範囲 {df['instruction_date'].min()}〜{df['instruction_date'].max()}")
+            print(f"✅ デバッグ: 製品ID一覧: {df['product_id'].unique()}")
+            
+            return df
+                
         except Exception as e:
-            print(f"生産計画登録エラー: {e}")
-            return False
-
-    def get_productions(self):
-        """登録済み生産計画を取得"""
-        try:
-            query = """
-            SELECT 
-                pid.id,
-                pid.product_id,
-                pid.instruction_date AS scheduled_date,
-                pid.instruction_quantity AS quantity,
-                pid.inspection_category,
-                p.product_name
-            FROM production_instructions_detail pid
-            LEFT JOIN products p ON pid.product_id = p.id
-            ORDER BY pid.instruction_date
-            """
-            return self.db.execute_query(query)
-        except Exception as e:
-            print(f"生産計画取得エラー: {e}")
-            return []
-
-    def update_production(self, plan_id: int, update_data: dict) -> bool:
-        """生産計画を更新"""
-        try:
-            query = """
-            UPDATE production_instructions_detail
-            SET product_id = %s,
-                instruction_date = %s,
-                instruction_quantity = %s
-            WHERE id = %s
-            """
-            params = (
-                update_data["product_id"],
-                update_data["scheduled_date"],
-                update_data["quantity"],
-                plan_id
-            )
-            return self.db.execute_update(query, params)
-        except Exception as e:
-            print(f"生産計画更新エラー: {e}")
-            return False
-
-    def delete_production(self, plan_id: int) -> bool:
-        """生産計画を削除"""
-        try:
-            query = "DELETE FROM production_instructions_detail WHERE id = %s"
-            return self.db.execute_update(query, (plan_id,))
-        except Exception as e:
-            print(f"生産計画削除エラー: {e}")
-            return False
+            print(f"❌ オーダーデータ取得エラー: {e}")
+            import traceback
+            traceback.print_exc()
+            return pd.DataFrame()

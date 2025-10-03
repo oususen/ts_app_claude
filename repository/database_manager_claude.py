@@ -29,32 +29,7 @@ class DatabaseManager:
         """セッションと接続を閉じる"""
         self.SessionLocal.remove()
         self.engine.dispose()
-# repository/database_manager.py の execute_query メソッド修正
-
-    def execute_query(self, query: str, params=None):
-        """クエリ実行 - 修正版"""
-        try:
-            with self.Session() as session:
-                print(f"🔍 デバッグ: クエリ実行: {query[:100]}...")
-                print(f"🔍 デバッグ: パラメータ: {params}")
-                
-                if params:
-                    # ✅ 辞書形式のパラメータを使用
-                    result = session.execute(text(query), params)
-                else:
-                    # ✅ パラメータなし
-                    result = session.execute(text(query))
-                
-                # ✅ 結果を辞書のリストで返す
-                rows = [dict(row._mapping) for row in result]
-                print(f"🔍 デバッグ: 取得行数: {len(rows)}")
-                return rows
-                
-        except Exception as e:
-            print(f"❌ クエリ実行エラー: {e}")
-            print(f"Query: {query}")
-            print(f"Params: {params}")
-            return []    
+    
     def execute_query(self, query, params=None):
         """
         SELECTクエリを実行してDataFrameを返す
@@ -101,7 +76,7 @@ class DatabaseManager:
         finally:
             session.close()
     
-    def deepseek_execute_update(self, query, params=None):
+    def execute_update(self, query, params=None):
         """
         INSERT/UPDATE/DELETEクエリを実行
         

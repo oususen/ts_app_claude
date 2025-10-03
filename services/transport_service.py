@@ -7,7 +7,7 @@ from repository.product_repository import ProductRepository
 from repository.loading_plan_repository import LoadingPlanRepository
 from domain.calculators.transport_planner import TransportPlanner
 from domain.validators.loading_validator import LoadingValidator
-from domain.models.transport import Container, Truck, LoadingItem
+from domain.models.transport import LoadingItem
 import pandas as pd
 
 class TransportService:
@@ -21,7 +21,7 @@ class TransportService:
         self.planner = TransportPlanner()
         self.validator = LoadingValidator()
     
-    def get_containers(self) -> List[Container]:
+    def get_containers(self):
         """容器一覧取得"""
         return self.transport_repo.get_containers()
 
@@ -74,10 +74,10 @@ class TransportService:
         
         loading_items = [LoadingItem(**item) for item in items]
         return self.validator.validate_loading(loading_items, containers, truck_row.iloc[0])
-# app/services/transport_service.py
+    
     def calculate_loading_plan_from_orders(self, 
-                                        start_date: date, 
-                                        days: int = 7) -> Dict[str, Any]:
+                                          start_date: date, 
+                                          days: int = 7) -> Dict[str, Any]:
         """
         オーダー情報から積載計画を自動作成
         
@@ -89,63 +89,14 @@ class TransportService:
             日別積載計画
         """
         
-        try:
-            # データ取得
-            end_date = start_date + timedelta(days=days - 1)
-            
-            # production_repository経由でオーダー取得
-            orders_df = self.production_repo.get_production_instructions(start_date, end_date)
-            
-            # ✅ 安全な空チェック
-            if orders_df is None or (hasattr(orders_df, 'empty') and orders_df.empty):
-                return {
-                    'daily_plans': {},
-                    'summary': {
-                        'total_days': days,
-                        'total_trips': 0,
-                        'total_warnings': 0,
-                        'unloaded_count': 0,
-                        'status': 'データなし'
-                    },
-                    'unloaded_tasks': [],
-                    'period': f"{start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}"
-                }
-            
-            products_df = self.product_repo.get_all_products()
-            containers = self.get_containers()
-            trucks_df = self.get_trucks()
-            truck_container_rules = self.transport_repo.get_truck_container_rules()
-            
-            # ✅ 他のデータもNoneチェック
-            if products_df is None or containers is None or trucks_df is None:
-                return {
-                    'daily_plans': {},
-                    'summary': {
-                        'total_days': days,
-                        'total_trips': 0,
-                        'total_warnings': 0,
-                        'unloaded_count': 0,
-                        'status': 'データ取得エラー'
-                    },
-                    'unloaded_tasks': [],
-                    'period': f"{start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}"
-                }
-            
-            # 積載計画計算
-            result = self.planner.calculate_loading_plan_from_orders(
-                orders_df=orders_df,
-                products_df=products_df,
-                containers=containers,
-                trucks_df=trucks_df,
-                truck_container_rules=truck_container_rules,
-                start_date=start_date,
-                days=days
-            )
-            
-            return result
-            
-        except Exception as e:
-            print(f"積載計画計算エラー: {e}")
+        # データ取得
+        end_date = start_date + timedelta(days=days - 1)
+        
+        # production_repository経由でオーダー取得
+        orders_df = self.production_repo.get_production_instructions(start_date, end_date)
+        
+        # データ確認
+        if orders_df is None or orders_df.empty:
             return {
                 'daily_plans': {},
                 'summary': {
@@ -153,12 +104,29 @@ class TransportService:
                     'total_trips': 0,
                     'total_warnings': 0,
                     'unloaded_count': 0,
-                    'status': f'計算エラー: {str(e)}'
+                    'status': '正常'
                 },
                 'unloaded_tasks': [],
                 'period': f"{start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}"
-            }    
-
+            }
+        
+        products_df = self.product_repo.get_all_products()
+        containers = self.get_containers()
+        trucks_df = self.get_trucks()
+        truck_container_rules = self.transport_repo.get_truck_container_rules()
+        
+        # 積載計画計算
+        result = self.planner.calculate_loading_plan_from_orders(
+            orders_df=orders_df,
+            products_df=products_df,
+            containers=containers,
+            trucks_df=trucks_df,
+            truck_container_rules=truck_container_rules,
+            start_date=start_date,
+            days=days
+        )
+        
+        return result
     
     def save_loading_plan(self, plan_result: Dict[str, Any], plan_name: str = None) -> int:
         """積載計画をDBに保存"""
@@ -175,57 +143,3 @@ class TransportService:
     def delete_loading_plan(self, plan_id: int) -> bool:
         """積載計画を削除"""
         return self.loading_plan_repo.delete_loading_plan(plan_id)
-        """
-        積載計画をExcelに出力
-        
-        Args:
-            plan_result: 計画結果
-            output_path: 出力ファイルパス
-            view_type: 'daily' または 'weekly'
-        """
-        try:
-            import openpyxl
-            from openpyxl.styles import Font, PatternFill, Alignment
-            
-            wb = openpyxl.Workbook()
-            
-            if view_type == 'daily':
-                self._export_daily_view(wb, plan_result)
-            else:
-                self._export_weekly_view(wb, plan_result)
-            
-            wb.save(output_path)
-            return True
-        except Exception as e:
-            print(f"Excel出力エラー: {e}")
-            return False
-    
-    def _export_daily_view(self, wb, plan_result):
-        """日別ビュー出力"""
-        ws = wb.active
-        ws.title = "日別積載計画"
-        
-        # ヘッダー
-        headers = ['日付', 'トラック名', '製品コード', '製品名', '容器数', '合計数量', '積載率(体積)', '積載率(重量)']
-        ws.append(headers)
-        
-        daily_plans = plan_result.get('daily_plans', {})
-        
-        for date_str, plan in sorted(daily_plans.items()):
-            for truck_plan in plan.get('trucks', []):
-                for item in truck_plan.get('loaded_items', []):
-                    ws.append([
-                        date_str,
-                        truck_plan['truck_name'],
-                        item.get('product_code', ''),
-                        item.get('product_name', ''),
-                        item['num_containers'],
-                        item['total_quantity'],
-                        f"{truck_plan['utilization']['volume_rate']}%",
-                        f"{truck_plan['utilization']['weight_rate']}%"
-                    ])
-    
-    def _export_weekly_view(self, wb, plan_result):
-        """週別ビュー出力"""
-        # 実装省略（必要に応じて追加）
-        pass
