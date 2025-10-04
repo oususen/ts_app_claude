@@ -5,7 +5,7 @@ from collections import defaultdict
 import pandas as pd
 
 class TransportPlanner:
-    """運送計画計算機 - 納期優先・前倒し対応版"""
+    """運送計画計算機 - 納期優先・集約優先版"""
     
     def calculate_loading_plan_from_orders(self,
                                           orders_df: pd.DataFrame,
@@ -121,12 +121,12 @@ class TransportPlanner:
             # 容器数を計算（入り数で割り切れない場合は切り上げ）
             num_containers = (quantity + capacity - 1) // capacity
             
-            # 各トラックの到着日を考慮して積載日を決定
-            for truck_id in truck_ids:
-                if truck_id not in truck_map:
-                    continue
-                
-                truck = truck_map[truck_id]
+            # ⭐ 修正: 各トラックごとに個別タスクを作るのではなく、
+            # 1つのタスクに複数トラックIDを保持
+            # 最初のトラックの到着日オフセットを使用
+            first_truck_id = truck_ids[0]
+            if first_truck_id in truck_map:
+                truck = truck_map[first_truck_id]
                 offset = int(truck.get('arrival_day_offset', 0))
                 
                 # 積載日 = 納期 - 到着日オフセット
@@ -141,119 +141,211 @@ class TransportPlanner:
                         'product_code': product.get('product_code', ''),
                         'product_name': product.get('product_name', ''),
                         'container_id': int(container_id),
-                        'truck_id': truck_id,
+                        'truck_ids': truck_ids,  # ⭐ 複数トラックIDを保持
                         'num_containers': num_containers,
                         'total_quantity': quantity,
                         'delivery_date': delivery_date,
                         'can_advance': can_advance,
-                        'original_date': loading_date
+                        'original_date': loading_date,
+                        'capacity': capacity
                     })
         
         return dict(daily_tasks)
    
     def _plan_single_day(self, tasks, container_map, truck_map, 
                         truck_container_rules) -> Tuple[Dict, List]:
-        """1日分の積載計画を作成"""
-        
-        # トラック別にグループ化
-        truck_tasks = defaultdict(list)
-        for task in tasks:
-            truck_tasks[task['truck_id']].append(task)
+        """1日分の積載計画を作成 - 集約優先版（残容量考慮）"""
         
         truck_plans = []
         remaining_tasks = []
         warnings = []
         
-        for truck_id, truck_specific_tasks in truck_tasks.items():
-            if truck_id not in truck_map:
-                remaining_tasks.extend(truck_specific_tasks)
-                continue
+        # トラックごとの使用済み容量を追跡
+        truck_used_space = defaultdict(lambda: defaultdict(int))  # {truck_id: {container_id: used_count}}
+        
+        # 製品ごとにグループ化
+        product_tasks = defaultdict(list)
+        for task in tasks:
+            key = (task['product_id'], task['delivery_date'])
+            product_tasks[key].append(task)
+        
+        # ⭐ 修正: 容器数の多い順にソート（大きい製品を優先的に積む）
+        # さらに、同じ容器数の場合は製品コード順で安定ソート
+        sorted_product_tasks = sorted(
+            product_tasks.items(),
+            key=lambda x: (
+                -sum(t['num_containers'] for t in x[1]),  # 容器数降順
+                x[1][0].get('product_code', '')  # 製品コード昇順（同点決着）
+            )
+        )
+        
+        # 各製品について積載
+        for (product_id, delivery_date), task_list in sorted_product_tasks:
+            # 同じ製品の総容器数を計算
+            total_containers = sum(t['num_containers'] for t in task_list)
+            remaining_containers = total_containers
             
-            truck_info = truck_map[truck_id]
+            # 使用可能なトラックIDを取得
+            available_truck_ids = set()
+            for task in task_list:
+                if 'truck_ids' in task:
+                    available_truck_ids.update(task['truck_ids'])
+                elif 'truck_id' in task:
+                    available_truck_ids.add(task['truck_id'])
             
-            # このトラックに積載
-            loaded, unloaded, truck_warnings = self._load_truck(
-                truck_specific_tasks, truck_info, container_map, truck_container_rules
+            # トラックを残容量の大きい順にソート
+            sorted_trucks = self._sort_trucks_by_remaining_capacity(
+                available_truck_ids, truck_map, container_map, 
+                task_list[0]['container_id'], truck_used_space
             )
             
-            if loaded:
-                truck_plans.append({
-                    'truck_id': truck_id,
-                    'truck_name': truck_info['name'],
-                    'loaded_items': loaded,
-                    'utilization': self._calculate_truck_utilization(loaded, truck_info, container_map)
-                })
+            # トラックに順番に積載
+            loaded_count = 0
+            for truck_id in sorted_trucks:
+                if remaining_containers <= 0:
+                    break
+                
+                if truck_id not in truck_map:
+                    continue
+                
+                truck_info = truck_map[truck_id]
+                container_id = task_list[0]['container_id']
+                
+                # ⭐ 修正: このトラックの残容量を計算
+                max_containers = self._calculate_max_containers_in_truck(
+                    container_map.get(container_id),
+                    truck_info['width'],
+                    truck_info['depth'],
+                    truck_info['height']
+                )
+                
+                # 既に使用済みの容器数を引く
+                used_containers = truck_used_space[truck_id][container_id]
+                available_space = max(0, max_containers - used_containers)
+                
+                # 積載する容器数を決定（必要数 vs 残容量）
+                containers_to_load = min(remaining_containers, available_space)
+                
+                # 🔍 デバッグ情報（オプション：必要に応じてコメントアウト）
+                print(f"\n製品: {task_list[0]['product_code']}, トラック: {truck_info['name']}")
+                print(f"  容器ID: {container_id}, 必要数: {remaining_containers}")
+                print(f"  最大容量: {max_containers}, 使用済み: {used_containers}, 残容量: {available_space}")
+                print(f"  → 積載: {containers_to_load}個")
+                
+                if containers_to_load > 0:
+                    # 積載タスク作成
+                    loaded_task = task_list[0].copy()
+                    loaded_task['truck_id'] = truck_id
+                    loaded_task['num_containers'] = containers_to_load
+                    loaded_task['total_quantity'] = containers_to_load * task_list[0].get('capacity', 1)
+                    
+                    # トラック計画に追加
+                    truck_plan = self._find_or_create_truck_plan(
+                        truck_plans, truck_id, truck_info
+                    )
+                    truck_plan['loaded_items'].append(loaded_task)
+                    
+                    # 使用済み容量を更新
+                    truck_used_space[truck_id][container_id] += containers_to_load
+                    
+                    # 残り容器数を更新
+                    remaining_containers -= containers_to_load
+                    loaded_count += 1
+                    
+                    # ⭐ 修正1: 製品コードで警告表示
+                    if loaded_count > 1:
+                        warnings.append(
+                            f"🚛 分散積載: {loaded_task['product_code']} "
+                            f"({containers_to_load}容器をトラック{truck_info['name']}に追加積載 - "
+                            f"合計{total_containers - remaining_containers}/{total_containers}容器)"
+                        )
             
-            remaining_tasks.extend(unloaded)
-            warnings.extend(truck_warnings)
+            # 積み残しがあれば記録
+            if remaining_containers > 0:
+                unloaded_task = task_list[0].copy()
+                unloaded_task['num_containers'] = remaining_containers
+                remaining_tasks.append(unloaded_task)
+                warnings.append(
+                    f"⚠️ 積載不可: {unloaded_task['product_code']} "
+                    f"({remaining_containers}容器が未積載)"
+                )
+        
+        # 各トラックの積載率を計算
+        for truck_plan in truck_plans:
+            truck_plan['utilization'] = self._calculate_truck_utilization(
+                truck_plan['loaded_items'], 
+                truck_map[truck_plan['truck_id']], 
+                container_map
+            )
         
         return {
             'trucks': truck_plans,
             'total_trips': len(truck_plans),
             'warnings': warnings
         }, remaining_tasks
-    
-    def _load_truck(self, tasks, truck_info, container_map, 
-                   truck_container_rules) -> Tuple[List, List, List]:
-        """トラックに積載"""
+
+    def _sort_trucks_by_remaining_capacity(self, truck_ids, truck_map, container_map, 
+                                           container_id, truck_used_space):
+        """トラックを残容量の大きい順にソート + デフォルト便優先"""
         
-        truck_width = int(truck_info['width'])
-        truck_depth = int(truck_info['depth'])
-        truck_height = int(truck_info['height'])
-        max_weight = int(truck_info['max_weight'])
+        container = container_map.get(container_id)
+        if not container:
+            return sorted(truck_ids)
         
-        loaded = []
-        unloaded = []
-        warnings = []
-        
-        current_weight = 0
-        
-        # 容器ごとの積載可能数を計算
-        container_capacity_in_truck = {}
-        
-        for task in tasks:
-            container_id = task['container_id']
-            
-            if container_id not in container_map:
-                unloaded.append(task)
-                warnings.append(f"容器ID {container_id} が見つかりません")
+        truck_capacities = []
+        for truck_id in truck_ids:
+            if truck_id not in truck_map:
                 continue
             
-            container = container_map[container_id]
+            truck = truck_map[truck_id]
             
-            # トラックに何個積めるか計算
-            if container_id not in container_capacity_in_truck:
-                max_containers = self._calculate_max_containers_in_truck(
-                    container, truck_width, truck_depth, truck_height
-                )
-                container_capacity_in_truck[container_id] = {
-                    'max': max_containers,
-                    'used': 0
-                }
+            # トラックの最大積載容量
+            max_containers = self._calculate_max_containers_in_truck(
+                container,
+                truck['width'],
+                truck['depth'],
+                truck['height']
+            )
             
-            # 積載チェック
-            needed = task['num_containers']
-            available = container_capacity_in_truck[container_id]['max'] - \
-                       container_capacity_in_truck[container_id]['used']
+            # 既に使用済みの容器数
+            used_containers = truck_used_space[truck_id][container_id]
             
-            if available >= needed:
-                # 重量チェック
-                container_weight = getattr(container, 'max_weight', 0) * needed
-                if current_weight + container_weight <= max_weight:
-                    loaded.append(task)
-                    container_capacity_in_truck[container_id]['used'] += needed
-                    current_weight += container_weight
-                else:
-                    unloaded.append(task)
-                    warnings.append(f"重量超過: {task['product_name']}")
-            else:
-                unloaded.append(task)
-                warnings.append(f"容積不足: {task['product_name']} (必要: {needed}, 空き: {available})")
+            # 残容量を計算
+            remaining_capacity = max(0, max_containers - used_containers)
+            
+            # デフォルト便フラグを取得
+            is_default = truck.get('default_use', False)
+            
+            truck_capacities.append((truck_id, remaining_capacity, is_default))
         
-        return loaded, unloaded, warnings
+        # ⭐ ソート優先順位:
+        # 1. デフォルト便を優先（降順）
+        # 2. 残容量の大きい順（降順）
+        truck_capacities.sort(key=lambda x: (-x[2], -x[1]))
+        
+        return [truck_id for truck_id, _, _ in truck_capacities]
+
+    def _find_or_create_truck_plan(self, truck_plans, truck_id, truck_info):
+        """トラック計画を検索または新規作成"""
+        for plan in truck_plans:
+            if plan['truck_id'] == truck_id:
+                return plan
+        
+        # 新規作成
+        new_plan = {
+            'truck_id': truck_id,
+            'truck_name': truck_info['name'],
+            'loaded_items': [],
+            'utilization': {'volume_rate': 0, 'weight_rate': 0}
+        }
+        truck_plans.append(new_plan)
+        return new_plan
     
     def _calculate_max_containers_in_truck(self, container, truck_w, truck_d, truck_h) -> int:
-        """トラックに積める容器の最大数を計算"""
+        """トラックに積める容器の最大数を計算（水平回転のみ、縦置き不可）"""
+        
+        if not container:
+            return 0
         
         c_w = container.width
         c_d = container.depth
@@ -264,15 +356,39 @@ class TransportPlanner:
         if not stackable:
             max_stack = 1
         
-        # 横方向の配置数
-        num_w = truck_w // c_w
-        num_d = truck_d // c_d
+        # デバッグ情報（必要に応じてコメント解除）
+        print(f"容器ID:{container.id}, W:{c_w}, D:{c_d}, H:{c_h}")
+        print(f"  stackable:{stackable}, max_stack:{max_stack}")
+        print(f"  トラック: W:{truck_w}, D:{truck_d}, H:{truck_h}")
         
-        # 縦方向の積み重ね数（物理的制約とmax_stackの小さい方）
-        physical_max_h = truck_h // c_h
-        actual_stack = min(physical_max_h, max_stack)
+        # 水平面での配置パターンのみ（上部開口のため縦置き不可）
+        patterns = []
         
-        return num_w * num_d * actual_stack
+        # パターン1: 通常配置 (幅W × 奥行D)
+        num_w1 = truck_w // c_w
+        num_d1 = truck_d // c_d
+        physical_h1 = truck_h // c_h
+        stack1 = min(physical_h1, max_stack)
+        pattern1_total = num_w1 * num_d1 * stack1
+        patterns.append(pattern1_total)
+        
+        # パターン2: 90度水平回転 (幅D × 奥行W)
+        num_w2 = truck_w // c_d
+        num_d2 = truck_d // c_w
+        physical_h2 = truck_h // c_h
+        stack2 = min(physical_h2, max_stack)
+        pattern2_total = num_w2 * num_d2 * stack2
+        patterns.append(pattern2_total)
+        
+        # デバッグ情報（必要に応じてコメント解除）
+        print(f"  パターン1: {num_w1}×{num_d1}×{stack1}段 = {pattern1_total}個")
+        print(f"  パターン2: {num_w2}×{num_d2}×{stack2}段 = {pattern2_total}個")
+        
+        # 最大値を返す（水平回転のみ）
+        max_count = max(patterns) if patterns else 0
+        print(f"  → 最大: {max_count}個\n")
+        
+        return max_count
     
     def _calculate_truck_utilization(self, loaded_items, truck_info, container_map) -> Dict:
         """積載率を計算"""
@@ -341,7 +457,7 @@ class TransportPlanner:
                     daily_plans[date_str]['trucks'].extend(plan['trucks'])
                     daily_plans[date_str]['total_trips'] += len(plan['trucks'])
                     daily_plans[date_str]['warnings'].append(
-                        f"前倒し: {task['product_name']} ({original_date.strftime('%m/%d')} → {new_date.strftime('%m/%d')})"
+                        f"📅 前倒し: {task['product_code']} ({original_date.strftime('%m/%d')} → {new_date.strftime('%m/%d')})"
                     )
                     rescheduled = True
                     break
@@ -364,127 +480,3 @@ class TransportPlanner:
             'unloaded_count': len(unloaded_tasks),
             'status': '正常' if not unloaded_tasks else '警告あり'
         }
-    # app/domain/calculators/transport_planner.py に追加
-
-    def calculate_loading_plan_from_orders(self, 
-                                        orders_df, 
-                                        products_df, 
-                                        containers, 
-                                        trucks_df, 
-                                        truck_container_rules, 
-                                        start_date, 
-                                        days):
-        """オーダーデータから積載計画を計算"""
-        
-        # 簡易実装 - 実際のロジックをここに実装
-        daily_plans = {}
-        
-        # 日付ループ
-        for i in range(days):
-            current_date = start_date + timedelta(days=i)
-            date_str = current_date.strftime('%Y-%m-%d')
-            
-            # その日のオーダーをフィルタリング
-            day_orders = orders_df[orders_df['instruction_date'] == current_date]
-            
-            if day_orders.empty:
-                daily_plans[date_str] = {
-                    'trucks': [],
-                    'summary': {
-                        'total_trips': 0,
-                        'total_volume': 0,
-                        'total_weight': 0
-                    }
-                }
-                continue
-            
-            # 簡易的なトラック割り当てロジック
-            # 実際にはより複雑な最適化ロジックを実装
-            truck_plans = []
-            
-            for _, truck in trucks_df.iterrows():
-                # トラックごとの積載計画を作成
-                truck_plan = self._create_truck_plan_for_day(
-                    day_orders, products_df, containers, truck
-                )
-                if truck_plan:
-                    truck_plans.append(truck_plan)
-            
-            daily_plans[date_str] = {
-                'trucks': truck_plans,
-                'summary': {
-                    'total_trips': len(truck_plans),
-                    'total_volume': sum(p['total_volume'] for p in truck_plans),
-                    'total_weight': sum(p['total_weight'] for p in truck_plans)
-                }
-            }
-        
-        return {
-            'daily_plans': daily_plans,
-            'summary': {
-                'total_days': days,
-                'total_trips': sum(len(day['trucks']) for day in daily_plans.values()),
-                'total_warnings': 0,
-                'unloaded_count': 0,
-                'status': '正常'
-            },
-            'unloaded_tasks': [],
-            'period': f"{start_date.strftime('%Y-%m-%d')} ~ {(start_date + timedelta(days=days-1)).strftime('%Y-%m-%d')}"
-        }
-
-    def _create_truck_plan_for_day(self, day_orders, products_df, containers, truck):
-        """1台のトラックの日次積載計画を作成"""
-        # 簡易実装
-        loaded_items = []
-        current_volume = 0
-        current_weight = 0
-        
-        truck_volume = (truck['width'] * truck['depth'] * truck['height']) / 1000000000
-        
-        for _, order in day_orders.iterrows():
-            # 製品情報を取得
-            product = products_df[products_df['id'] == order['product_id']].iloc[0]
-            container_id = product.get('used_container_id', 1)
-            
-            # 容器を検索
-            container = next((c for c in containers if c.id == container_id), None)
-            if not container:
-                continue
-            
-            # 積載計算
-            container_volume = (container.width * container.depth * container.height) / 1000000000
-            item_volume = container_volume * order['instruction_quantity']
-            item_weight = 5.0 * order['instruction_quantity']  # 仮の重量
-            
-            if (current_volume + item_volume <= truck_volume and 
-                current_weight + item_weight <= truck['max_weight']):
-                
-                loaded_items.append({
-                    'product_id': order['product_id'],
-                    'product_code': product.get('product_code', ''),
-                    'product_name': product.get('product_name', ''),
-                    'container_id': container_id,
-                    'quantity': order['instruction_quantity'],
-                    'num_containers': order['instruction_quantity'],  # 簡易計算
-                    'total_quantity': order['instruction_quantity'],
-                    'volume': item_volume,
-                    'weight': item_weight
-                })
-                
-                current_volume += item_volume
-                current_weight += item_weight
-        
-        if loaded_items:
-            return {
-                'truck_id': truck['id'],
-                'truck_name': truck['name'],
-                'loaded_items': loaded_items,
-                'total_volume': current_volume,
-                'total_weight': current_weight,
-                'utilization': {
-                    'volume_rate': (current_volume / truck_volume) * 100 if truck_volume > 0 else 0,
-                    'weight_rate': (current_weight / truck['max_weight']) * 100 if truck['max_weight'] > 0 else 0
-                }
-            }
-        
-        return None
