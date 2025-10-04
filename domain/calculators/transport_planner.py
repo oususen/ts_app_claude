@@ -19,7 +19,7 @@ class TransportPlanner:
         オーダーから積載計画を作成
         
         Args:
-            orders_df: 生産指示データ (instruction_date, product_id, instruction_quantity)
+            orders_df: 生産指示データ (delivery_date, product_id, order_quantity)
             products_df: 製品マスタ (id, capacity, used_container_id, used_truck_ids, can_advance)
             containers: 容器マスタ
             trucks_df: トラックマスタ
@@ -90,10 +90,17 @@ class TransportPlanner:
         # 製品情報をマップ化
         product_map = {int(row['id']): row for _, row in products_df.iterrows()}
         
+        print(f"🔍 デバッグ: オーダーDF カラム = {orders_df.columns.tolist()}")
+        
         for _, order in orders_df.iterrows():
             product_id = int(order['product_id'])
-            delivery_date = order['instruction_date']
-            quantity = int(order['instruction_quantity'])
+            
+            # ✅ 修正: delivery_dateとorder_quantityを使用（両方に対応）
+            delivery_date = order.get('delivery_date') or order.get('instruction_date')
+            quantity = int(order.get('order_quantity') or order.get('instruction_quantity', 0))
+            
+            if not delivery_date or quantity <= 0:
+                continue
             
             if product_id not in product_map:
                 continue
@@ -121,8 +128,6 @@ class TransportPlanner:
             # 容器数を計算（入り数で割り切れない場合は切り上げ）
             num_containers = (quantity + capacity - 1) // capacity
             
-            # ⭐ 修正: 各トラックごとに個別タスクを作るのではなく、
-            # 1つのタスクに複数トラックIDを保持
             # 最初のトラックの到着日オフセットを使用
             first_truck_id = truck_ids[0]
             if first_truck_id in truck_map:
@@ -141,7 +146,7 @@ class TransportPlanner:
                         'product_code': product.get('product_code', ''),
                         'product_name': product.get('product_name', ''),
                         'container_id': int(container_id),
-                        'truck_ids': truck_ids,  # ⭐ 複数トラックIDを保持
+                        'truck_ids': truck_ids,
                         'num_containers': num_containers,
                         'total_quantity': quantity,
                         'delivery_date': delivery_date,
@@ -161,7 +166,7 @@ class TransportPlanner:
         warnings = []
         
         # トラックごとの使用済み容量を追跡
-        truck_used_space = defaultdict(lambda: defaultdict(int))  # {truck_id: {container_id: used_count}}
+        truck_used_space = defaultdict(lambda: defaultdict(int))
         
         # 製品ごとにグループ化
         product_tasks = defaultdict(list)
@@ -169,19 +174,17 @@ class TransportPlanner:
             key = (task['product_id'], task['delivery_date'])
             product_tasks[key].append(task)
         
-        # ⭐ 修正: 容器数の多い順にソート（大きい製品を優先的に積む）
-        # さらに、同じ容器数の場合は製品コード順で安定ソート
+        # 容器数の多い順にソート
         sorted_product_tasks = sorted(
             product_tasks.items(),
             key=lambda x: (
-                -sum(t['num_containers'] for t in x[1]),  # 容器数降順
-                x[1][0].get('product_code', '')  # 製品コード昇順（同点決着）
+                -sum(t['num_containers'] for t in x[1]),
+                x[1][0].get('product_code', '')
             )
         )
         
         # 各製品について積載
         for (product_id, delivery_date), task_list in sorted_product_tasks:
-            # 同じ製品の総容器数を計算
             total_containers = sum(t['num_containers'] for t in task_list)
             remaining_containers = total_containers
             
@@ -211,7 +214,7 @@ class TransportPlanner:
                 truck_info = truck_map[truck_id]
                 container_id = task_list[0]['container_id']
                 
-                # ⭐ 修正: このトラックの残容量を計算
+                # このトラックの残容量を計算
                 max_containers = self._calculate_max_containers_in_truck(
                     container_map.get(container_id),
                     truck_info['width'],
@@ -223,14 +226,8 @@ class TransportPlanner:
                 used_containers = truck_used_space[truck_id][container_id]
                 available_space = max(0, max_containers - used_containers)
                 
-                # 積載する容器数を決定（必要数 vs 残容量）
+                # 積載する容器数を決定
                 containers_to_load = min(remaining_containers, available_space)
-                
-                # 🔍 デバッグ情報（オプション：必要に応じてコメントアウト）
-                print(f"\n製品: {task_list[0]['product_code']}, トラック: {truck_info['name']}")
-                print(f"  容器ID: {container_id}, 必要数: {remaining_containers}")
-                print(f"  最大容量: {max_containers}, 使用済み: {used_containers}, 残容量: {available_space}")
-                print(f"  → 積載: {containers_to_load}個")
                 
                 if containers_to_load > 0:
                     # 積載タスク作成
@@ -252,7 +249,6 @@ class TransportPlanner:
                     remaining_containers -= containers_to_load
                     loaded_count += 1
                     
-                    # ⭐ 修正1: 製品コードで警告表示
                     if loaded_count > 1:
                         warnings.append(
                             f"🚛 分散積載: {loaded_task['product_code']} "
@@ -318,9 +314,7 @@ class TransportPlanner:
             
             truck_capacities.append((truck_id, remaining_capacity, is_default))
         
-        # ⭐ ソート優先順位:
-        # 1. デフォルト便を優先（降順）
-        # 2. 残容量の大きい順（降順）
+        # ソート優先順位: デフォルト便優先 → 残容量大
         truck_capacities.sort(key=lambda x: (-x[2], -x[1]))
         
         return [truck_id for truck_id, _, _ in truck_capacities]
@@ -356,15 +350,10 @@ class TransportPlanner:
         if not stackable:
             max_stack = 1
         
-        # デバッグ情報（必要に応じてコメント解除）
-        print(f"容器ID:{container.id}, W:{c_w}, D:{c_d}, H:{c_h}")
-        print(f"  stackable:{stackable}, max_stack:{max_stack}")
-        print(f"  トラック: W:{truck_w}, D:{truck_d}, H:{truck_h}")
-        
-        # 水平面での配置パターンのみ（上部開口のため縦置き不可）
+        # 水平面での配置パターンのみ
         patterns = []
         
-        # パターン1: 通常配置 (幅W × 奥行D)
+        # パターン1: 通常配置
         num_w1 = truck_w // c_w
         num_d1 = truck_d // c_d
         physical_h1 = truck_h // c_h
@@ -372,7 +361,7 @@ class TransportPlanner:
         pattern1_total = num_w1 * num_d1 * stack1
         patterns.append(pattern1_total)
         
-        # パターン2: 90度水平回転 (幅D × 奥行W)
+        # パターン2: 90度水平回転
         num_w2 = truck_w // c_d
         num_d2 = truck_d // c_w
         physical_h2 = truck_h // c_h
@@ -380,13 +369,7 @@ class TransportPlanner:
         pattern2_total = num_w2 * num_d2 * stack2
         patterns.append(pattern2_total)
         
-        # デバッグ情報（必要に応じてコメント解除）
-        print(f"  パターン1: {num_w1}×{num_d1}×{stack1}段 = {pattern1_total}個")
-        print(f"  パターン2: {num_w2}×{num_d2}×{stack2}段 = {pattern2_total}個")
-        
-        # 最大値を返す（水平回転のみ）
         max_count = max(patterns) if patterns else 0
-        print(f"  → 最大: {max_count}個\n")
         
         return max_count
     
@@ -433,7 +416,7 @@ class TransportPlanner:
             
             # 前の日に移動を試みる
             rescheduled = False
-            for days_back in range(1, 8):  # 最大7日前まで
+            for days_back in range(1, 8):
                 new_date = original_date - timedelta(days=days_back)
                 
                 if new_date < start_date:

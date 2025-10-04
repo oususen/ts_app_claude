@@ -1,7 +1,7 @@
 # app/ui/pages/transport_page.py
 import streamlit as st
 import pandas as pd
-from datetime import date, timedelta
+from datetime import date, datetime,timedelta
 from typing import Dict
 from ui.components.forms import FormComponents
 from ui.components.tables import TableComponents
@@ -110,10 +110,13 @@ class TransportPage:
                     
                     # 計画確認タブへ移動を促す
                     st.info("詳細は「📊 計画確認」タブでご確認ください")
+
                     
-                    # 保存ボタン
+                    # 保存とExcel出力
                     st.markdown("---")
-                    col_save1, col_save2 = st.columns([3, 1])
+                    st.subheader("💾 計画の保存・出力")
+                    
+                    col_save1, col_save2, col_save3 = st.columns([3, 1, 1])
                     
                     with col_save1:
                         plan_name = st.text_input(
@@ -125,7 +128,7 @@ class TransportPage:
                     with col_save2:
                         st.write("")
                         st.write("")
-                        if st.button("💾 計画を保存", type="primary", use_container_width=True):
+                        if st.button("💾 DBに保存", type="primary", use_container_width=True):
                             try:
                                 plan_id = self.service.save_loading_plan(result, plan_name)
                                 st.success(f"✅ 計画を保存しました (ID: {plan_id})")
@@ -133,10 +136,62 @@ class TransportPage:
                             except Exception as e:
                                 st.error(f"保存エラー: {e}")
                     
+                    with col_save3:
+                        st.write("")
+                        st.write("")
+                        if st.button("📥 Excel出力", type="secondary", use_container_width=True):
+                            try:
+                                from services.excel_export_service import ExcelExportService
+                                
+                                excel_service = ExcelExportService()
+                                excel_data = excel_service.export_loading_plan(result)
+                                
+                                st.download_button(
+                                    label="📥 ダウンロード",
+                                    data=excel_data,
+                                    file_name=f"積載計画_{start_date.strftime('%Y%m%d')}_{datetime.now().strftime('%H%M%S')}.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    type="primary"
+                                )
+                                st.success("✅ Excelファイルを生成しました")
+                            except ImportError:
+                                st.error("❌ openpyxlがインストールされていません。`pip install openpyxl`を実行してください")
+                            except Exception as e:
+                                st.error(f"Excel出力エラー: {e}")
+                                import traceback
+                                st.code(traceback.format_exc())
+                    
                 except Exception as e:
                     st.error(f"積載計画作成エラー: {e}")
                     import traceback
-                    st.code(traceback.format_exc())
+                    st.code(traceback.format_exc())                    
+                #     # 保存ボタン
+                #     st.markdown("---")
+
+                #     col_save1, col_save2 = st.columns([3, 1])
+                    
+                #     with col_save1:
+                #         plan_name = st.text_input(
+                #             "計画名",
+                #             value=f"積載計画_{start_date.strftime('%Y%m%d')}",
+                #             help="この計画に名前を付けて保存します"
+                #         )
+                    
+                #     with col_save2:
+                #         st.write("")
+                #         st.write("")
+                #         if st.button("💾 計画を保存", type="primary", use_container_width=True):
+                #             try:
+                #                 plan_id = self.service.save_loading_plan(result, plan_name)
+                #                 st.success(f"✅ 計画を保存しました (ID: {plan_id})")
+                #                 st.session_state['saved_plan_id'] = plan_id
+                #             except Exception as e:
+                #                 st.error(f"保存エラー: {e}")
+                    
+                # except Exception as e:
+                #     st.error(f"積載計画作成エラー: {e}")
+                #     import traceback
+                #     st.code(traceback.format_exc())
     
     def _show_plan_view(self):
         """計画確認"""

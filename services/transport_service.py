@@ -1,25 +1,29 @@
-# app/services/transport_service.py
+# app/services/transport_service.py（納入進度統合版）
 from typing import List, Dict, Any
 from datetime import date, timedelta
 from repository.transport_repository import TransportRepository
 from repository.production_repository import ProductionRepository
 from repository.product_repository import ProductRepository
 from repository.loading_plan_repository import LoadingPlanRepository
+from repository.delivery_progress_repository import DeliveryProgressRepository
 from domain.calculators.transport_planner import TransportPlanner
 from domain.validators.loading_validator import LoadingValidator
 from domain.models.transport import LoadingItem
 import pandas as pd
 
 class TransportService:
-    """運送関連ビジネスロジック"""
+    """運送関連ビジネスロジック（納入進度統合版）"""
     
     def __init__(self, db_manager):
         self.transport_repo = TransportRepository(db_manager)
         self.production_repo = ProductionRepository(db_manager)
         self.product_repo = ProductRepository(db_manager)
         self.loading_plan_repo = LoadingPlanRepository(db_manager)
+        self.delivery_progress_repo = DeliveryProgressRepository(db_manager)  # 追加
         self.planner = TransportPlanner()
         self.validator = LoadingValidator()
+    
+    # ===== 既存機能 =====
     
     def get_containers(self):
         """容器一覧取得"""
@@ -55,45 +59,58 @@ class TransportService:
         """トラック作成"""
         return self.transport_repo.save_truck(truck_data)
     
-    def calculate_delivery_plan(self, delivery_items: List[dict]) -> Dict[str, Any]:
-        """配送計画計算（旧バージョン・互換性のため残す）"""
-        containers = self.get_containers()
-        trucks = self.get_trucks()
-        
-        items = [LoadingItem(**item) for item in delivery_items]
-        return self.planner.calculate_loading_plan(items, containers, trucks)
-    
-    def validate_loading(self, items: List[dict], truck_id: int) -> tuple:
-        """積載バリデーション"""
-        containers = self.get_containers()
-        trucks_df = self.get_trucks()
-        
-        truck_row = trucks_df[trucks_df['id'] == truck_id]
-        if truck_row.empty:
-            return False, ["トラックが見つかりません"]
-        
-        loading_items = [LoadingItem(**item) for item in items]
-        return self.validator.validate_loading(loading_items, containers, truck_row.iloc[0])
+    # ===== 積載計画機能 =====
     
     def calculate_loading_plan_from_orders(self, 
                                           start_date: date, 
-                                          days: int = 7) -> Dict[str, Any]:
+                                          days: int = 7,
+                                          use_delivery_progress: bool = True) -> Dict[str, Any]:
         """
         オーダー情報から積載計画を自動作成
         
         Args:
             start_date: 計画開始日
             days: 計画日数（デフォルト7日間）
+            use_delivery_progress: 納入進度テーブルを使用するか（True推奨）
         
         Returns:
             日別積載計画
         """
         
-        # データ取得
         end_date = start_date + timedelta(days=days - 1)
         
-        # production_repository経由でオーダー取得
-        orders_df = self.production_repo.get_production_instructions(start_date, end_date)
+        # ✅ 修正: 納入進度テーブルがあればそれを優先、なければ生産指示テーブルを使用
+        if use_delivery_progress:
+            orders_df = self.delivery_progress_repo.get_delivery_progress(start_date, end_date)
+            
+            if orders_df.empty:
+                print("⚠️ 納入進度データがありません。生産指示データを使用します。")
+                orders_df = self.production_repo.get_production_instructions(start_date, end_date)
+                
+                # ✅ カラム名を統一（必須）
+                if not orders_df.empty:
+                    orders_df = orders_df.rename(columns={
+                        'instruction_date': 'delivery_date',
+                        'instruction_quantity': 'order_quantity'
+                    })
+            else:
+                print(f"✅ 納入進度データを使用: {len(orders_df)}件")
+        else:
+            # 生産指示テーブルから取得
+            orders_df = self.production_repo.get_production_instructions(start_date, end_date)
+            
+            # ✅ カラム名を統一（必須）
+            if not orders_df.empty:
+                orders_df = orders_df.rename(columns={
+                    'instruction_date': 'delivery_date',
+                    'instruction_quantity': 'order_quantity'
+                })
+        
+        # ✅ デバッグ情報
+        if not orders_df.empty:
+            print(f"📊 オーダーデータ: {len(orders_df)}件")
+            print(f"📊 カラム: {orders_df.columns.tolist()}")
+            print(f"📊 サンプル: {orders_df.head(1).to_dict()}")
         
         # データ確認
         if orders_df is None or orders_df.empty:
@@ -143,3 +160,33 @@ class TransportService:
     def delete_loading_plan(self, plan_id: int) -> bool:
         """積載計画を削除"""
         return self.loading_plan_repo.delete_loading_plan(plan_id)
+    
+    # ===== 納入進度機能（新規） =====
+    
+    def get_delivery_progress(self, start_date: date = None, end_date: date = None) -> pd.DataFrame:
+        """納入進度取得"""
+        return self.delivery_progress_repo.get_delivery_progress(start_date, end_date)
+    
+    def create_delivery_progress(self, progress_data: Dict[str, Any]) -> int:
+        """納入進度を新規作成"""
+        return self.delivery_progress_repo.create_delivery_progress(progress_data)
+    
+    def update_delivery_progress(self, progress_id: int, update_data: Dict[str, Any]) -> bool:
+        """納入進度を更新"""
+        return self.delivery_progress_repo.update_delivery_progress(progress_id, update_data)
+    
+    def delete_delivery_progress(self, progress_id: int) -> bool:
+        """納入進度を削除"""
+        return self.delivery_progress_repo.delete_delivery_progress(progress_id)
+    
+    def get_progress_summary(self) -> Dict[str, Any]:
+        """納入進度サマリー取得"""
+        return self.delivery_progress_repo.get_progress_summary()
+    
+    def create_shipment_record(self, shipment_data: Dict[str, Any]) -> bool:
+        """出荷実績を登録"""
+        return self.delivery_progress_repo.create_shipment_record(shipment_data)
+    
+    def get_shipment_records(self, progress_id: int = None) -> pd.DataFrame:
+        """出荷実績を取得"""
+        return self.delivery_progress_repo.get_shipment_records(progress_id)
