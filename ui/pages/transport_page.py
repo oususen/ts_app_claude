@@ -682,11 +682,7 @@ class TransportPage:
             st.write("緊急表示:")
             #st.write(f"- 計画期間: {start_date} から {days}日間")
             st.write("- ステータス: 表示エラー")
-# ui/pages/transport_page.py
 
-# ui/pages/transport_page.py
-# ui/pages/transport_page.py - 完全差し替え版
-# ui/pages/transport_page.py
 
     def display_plan_confirmation(self):
         """計画確認画面 - 一時無効化"""
@@ -695,56 +691,27 @@ class TransportPage:
         st.write("積載計画作成機能は正常に動作しています")
         return
 
-        # 以下のコードは一時的にコメントアウト
-        """
         try:
-            st.header("📋 積載計画確認")
+                st.header("📋 積載計画確認")
+                
+                # 保存済み計画の取得を試みる
+                try:
+                    saved_plans = self.transport_service.get_all_loading_plans()
+                except:
+                    saved_plans = []
+                
+                if not saved_plans:
+                    st.info("保存済みの計画がありません")
+                    st.write("まず「積載計画作成」で計画を作成してください")
+                    return
+                
+                # 簡易表示のみ
+                st.subheader("保存済み計画一覧")
+                for plan in saved_plans:
+                    st.write(f"- {plan.get('id')}: {plan.get('plan_name', '無名')}")
             
-            # 保存済み計画の取得を試みる
-            try:
-                saved_plans = self.transport_service.get_all_loading_plans()
-            except:
-                saved_plans = []
-            
-            if not saved_plans:
-                st.info("保存済みの計画がありません")
-                st.write("まず「積載計画作成」で計画を作成してください")
-                return
-            
-            # 簡易表示のみ
-            st.subheader("保存済み計画一覧")
-            for plan in saved_plans:
-                st.write(f"- {plan.get('id')}: {plan.get('plan_name', '無名')}")
-        
         except Exception as e:
-            st.error(f"計画確認エラー: {str(e)}")
-        """
+                st.error(f"計画確認エラー: {str(e)}")
+        
 
-    # def display_plan_confirmation(self):
-    #     """計画確認画面 - 最小限の安全版"""
-    #     st.header("📋 積載計画確認")
-        
-    #     # 常に成功する簡易表示
-    #     st.success("✅ 積載計画機能は正常に動作しています")
-        
-    #     col1, col2, col3 = st.columns(3)
-    #     with col1:
-    #         st.metric("総便数", 12)
-    #     with col2:
-    #         st.metric("計画日数", 7)
-    #     with col3:
-    #         st.metric("ステータス", "正常")
-        
-    #     st.write("**計画期間:** 2025-10-07 ~ 2025-10-13")
-        
-    #     # 簡易的な計画プレビュー
-    #     st.subheader("📅 計画プレビュー")
-    #     sample_dates = ["2025-10-07", "2025-10-08", "2025-10-09"]
-    #     for date in sample_dates:
-    #         with st.expander(f"{date} - 2便"):
-    #             st.write("🚚 10tトラック")
-    #             st.write("  - 製品A x 5容器")
-    #             st.write("🚚 8tトラック") 
-    #             st.write("  - 製品B x 3容器")
-        
-    #     st.info("💡 詳細な計画確認機能は近日実装予定です")
+    

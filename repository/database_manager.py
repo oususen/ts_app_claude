@@ -100,34 +100,23 @@ class DatabaseManager:
             return pd.DataFrame()
         finally:
             session.close()
-    
-    def deepseek_execute_update(self, query, params=None):
-        """
-        INSERT/UPDATE/DELETEクエリを実行
-        
-        Args:
-            query: SQL文字列
-            params: パラメータ（リストまたはタプル）
-        
-        Returns:
-            bool: 成功した場合True
-        """
+
+#ここ以下は削除　いまはテスト用
+    def execute_non_query(self, query: str, params=None):
+        """INSERT/UPDATE/DELETEクエリを実行"""
         session = self.get_session()
-        
         try:
             if params:
-                session.execute(text(query), params if isinstance(params, dict) else params)
+                session.execute(text(query), params)
             else:
                 session.execute(text(query))
-            
             session.commit()
-            return True
-            
         except Exception as e:
             session.rollback()
-            print(f"更新クエリ実行エラー: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
+            print(f"❌ クエリ実行エラー: {e}")
+            print(f"Query: {query}")
+            print(f"Params: {params}")
         finally:
             session.close()
+   
+    

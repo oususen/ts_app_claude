@@ -193,17 +193,7 @@ class TransportRepository:
         except Exception as e:
             print(f"❌ トラック容器ルール取得エラー: {e}")
             return []  # エラー時は空リストを返す
-    # def get_truck_container_rules(self):
-    #     session = self.db_manager.get_session()
-    #     try:
-    #         return session.query(TruckContainerRule).order_by(
-    #             TruckContainerRule.truck_id, TruckContainerRule.priority
-    #         ).all()
-    #     except SQLAlchemyError as e:
-    #         print(f"TruckContainerRule取得エラー: {e}")
-    #         return []
-    #     finally:
-    #         session.close()
+    
 
     def save_truck_container_rule(self, rule_data: dict) -> bool:
         session = self.db_manager.get_session()
