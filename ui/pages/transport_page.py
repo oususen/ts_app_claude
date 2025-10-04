@@ -165,33 +165,74 @@ class TransportPage:
                     st.error(f"積載計画作成エラー: {e}")
                     import traceback
                     st.code(traceback.format_exc())                    
-                #     # 保存ボタン
-                #     st.markdown("---")
-
-                #     col_save1, col_save2 = st.columns([3, 1])
-                    
-                #     with col_save1:
-                #         plan_name = st.text_input(
-                #             "計画名",
-                #             value=f"積載計画_{start_date.strftime('%Y%m%d')}",
-                #             help="この計画に名前を付けて保存します"
-                #         )
-                    
-                #     with col_save2:
-                #         st.write("")
-                #         st.write("")
-                #         if st.button("💾 計画を保存", type="primary", use_container_width=True):
-                #             try:
-                #                 plan_id = self.service.save_loading_plan(result, plan_name)
-                #                 st.success(f"✅ 計画を保存しました (ID: {plan_id})")
-                #                 st.session_state['saved_plan_id'] = plan_id
-                #             except Exception as e:
-                #                 st.error(f"保存エラー: {e}")
-                    
-                # except Exception as e:
-                #     st.error(f"積載計画作成エラー: {e}")
-                #     import traceback
-                #     st.code(traceback.format_exc())
+        # 計画保存・エクスポートセクション
+        if 'loading_plan' in st.session_state:
+            result = st.session_state['loading_plan']
+            
+            st.markdown("---")
+            st.subheader("💾 計画の保存とエクスポート")
+            
+            col_export1, col_export2, col_export3 = st.columns(3)
+            
+            with col_export1:
+                st.write("**DBに保存**")
+                plan_name = st.text_input(
+                    "計画名",
+                    value=f"積載計画_{result.get('period', '').split(' ~ ')[0]}",
+                    key="plan_name_save"
+                )
+                
+                if st.button("💾 DBに保存", type="primary"):
+                    try:
+                        plan_id = self.service.save_loading_plan(result, plan_name)
+                        st.success(f"✅ 計画を保存しました (ID: {plan_id})")
+                        st.session_state['saved_plan_id'] = plan_id
+                    except Exception as e:
+                        st.error(f"保存エラー: {e}")
+            
+            with col_export2:
+                st.write("**Excel出力**")
+                export_format = st.radio(
+                    "出力形式",
+                    options=['日別', '週別'],
+                    horizontal=True,
+                    key="export_format"
+                )
+                
+                if st.button("📥 Excelダウンロード", type="secondary"):
+                    try:
+                        format_key = 'daily' if export_format == '日別' else 'weekly'
+                        excel_data = self.service.export_loading_plan_to_excel(result, format_key)
+                        
+                        filename = f"積載計画_{export_format}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                        
+                        st.download_button(
+                            label="⬇️ ダウンロード",
+                            data=excel_data,
+                            file_name=filename,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                    except Exception as e:
+                        st.error(f"Excel出力エラー: {e}")
+            
+            with col_export3:
+                st.write("**CSV出力**")
+                st.write("")  # スペース調整
+                
+                if st.button("📄 CSVダウンロード", type="secondary"):
+                    try:
+                        csv_data = self.service.export_loading_plan_to_csv(result)
+                        
+                        filename = f"積載計画_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                        
+                        st.download_button(
+                            label="⬇️ ダウンロード",
+                            data=csv_data,
+                            file_name=filename,
+                            mime="text/csv"
+                        )
+                    except Exception as e:
+                        st.error(f"CSV出力エラー: {e}")
     
     def _show_plan_view(self):
         """計画確認"""

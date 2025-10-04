@@ -370,24 +370,118 @@ class CSVImportService:
         return instruction_count
     
     def _create_delivery_progress(self, v2_rows, v3_rows, product_ids) -> int:
-        """納入進度データを作成"""
-        return 0
+        """納入進度データを作成（受注情報として登録）"""
+        session = self.db.get_session()
+        progress_count = 0
+        
+        try:
+            from sqlalchemy import text
+            
+            print("\n🔄 納入進度データを作成中...")
+            
+            # production_instructions_detail から日次データを取得
+            for product_key, product_id in product_ids.items():
+                data_no, product_code, inspection_category = product_key
+                
+                # この製品の生産指示データを取得
+                instructions = session.execute(text("""
+                    SELECT 
+                        instruction_date,
+                        instruction_quantity,
+                        inspection_category
+                    FROM production_instructions_detail
+                    WHERE product_id = :product_id
+                    AND instruction_quantity > 0
+                    ORDER BY instruction_date
+                """), {'product_id': product_id}).fetchall()
+                
+                if not instructions:
+                    continue
+                
+                # 各日付の指示を納入進度として登録
+                for instruction in instructions:
+                    instruction_date = instruction[0]
+                    quantity = instruction[1]
+                    
+                    # オーダーIDを生成（例: ORD-20250801-001）
+                    order_id = f"ORD-{instruction_date.strftime('%Y%m%d')}-{product_id:03d}"
+                    
+                    # 納入進度として登録（重複チェック）
+                    existing = session.execute(text("""
+                        SELECT id FROM delivery_progress
+                        WHERE order_id = :order_id
+                    """), {'order_id': order_id}).fetchone()
+                    
+                    if not existing:
+                        session.execute(text("""
+                            INSERT INTO delivery_progress
+                            (order_id, product_id, order_date, delivery_date, 
+                             order_quantity, shipped_quantity, status, 
+                             customer_code, customer_name, priority)
+                            VALUES
+                            (:order_id, :product_id, :order_date, :delivery_date,
+                             :order_quantity, 0, '未出荷',
+                             :customer_code, :customer_name, 5)
+                        """), {
+                            'order_id': order_id,
+                            'product_id': product_id,
+                            'order_date': instruction_date,  # 受注日=指示日
+                            'delivery_date': instruction_date,  # 納期=指示日
+                            'order_quantity': quantity,
+                            'customer_code': f'C{data_no:03d}',
+                            'customer_name': f'取引先{data_no}'
+                        })
+                        
+                        progress_count += 1
+            
+            session.commit()
+            print(f"✅ 納入進度登録完了: {progress_count}件")
+            
+            return progress_count
+        
+        except Exception as e:
+            session.rollback()
+            print(f"❌ 納入進度作成エラー: {e}")
+            import traceback
+            traceback.print_exc()
+            return 0
+        finally:
+            session.close()
     
     def _parse_japanese_date(self, date_str: str):
-        """和暦日付を西暦に変換"""
+        """和暦日付を西暦に変換（複数フォーマット対応）"""
         if not date_str or date_str == '':
             return None
         
         try:
-            if date_str.startswith('R'):
-                year = int(date_str[1:3]) + 2018
+            # フォーマット1: 5桁数字（例: 50801 → 2025年8月1日）
+            # 形式: YMMDD（Yは下1桁の年、MMは月、DDは日）
+            if date_str.isdigit() and len(date_str) == 5:
+                year_last_digit = int(date_str[0])  # 最初の1桁（例: 5）
+                month = int(date_str[1:3])           # 月（例: 08）
+                day = int(date_str[3:5])             # 日（例: 01）
+                
+                # 2020年代と仮定（5 → 2025）
+                year = 2020 + year_last_digit
+                
+                date_obj = datetime(year, month, day)
+                return date_obj.date()
+            
+            # フォーマット2: R06/12/02形式（令和6年12月2日）
+            elif date_str.startswith('R'):
+                reiwa_year = int(date_str[1:3])
+                year = 2018 + reiwa_year  # 令和元年=2019
                 month_day = date_str[4:]
                 date_obj = datetime.strptime(f"{year}/{month_day}", '%Y/%m/%d')
                 return date_obj.date()
+            
+            # フォーマット3: 西暦（YYYY/MM/DD）
             elif '/' in date_str:
                 date_obj = datetime.strptime(date_str, '%Y/%m/%d')
                 return date_obj.date()
+            
             return None
+        
         except Exception as e:
             return None
     

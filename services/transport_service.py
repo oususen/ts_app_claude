@@ -10,6 +10,8 @@ from domain.calculators.transport_planner import TransportPlanner
 from domain.validators.loading_validator import LoadingValidator
 from domain.models.transport import LoadingItem
 import pandas as pd
+from datetime import datetime
+from io import BytesIO
 
 class TransportService:
     """運送関連ビジネスロジック（納入進度統合版）"""
@@ -23,7 +25,7 @@ class TransportService:
         self.planner = TransportPlanner()
         self.validator = LoadingValidator()
     
-    # ===== 既存機能 =====
+        # ===== トラック・容器管理機能 =====
     
     def get_containers(self):
         """容器一覧取得"""
@@ -190,3 +192,157 @@ class TransportService:
     def get_shipment_records(self, progress_id: int = None) -> pd.DataFrame:
         """出荷実績を取得"""
         return self.delivery_progress_repo.get_shipment_records(progress_id)
+
+# services/transport_service.py に追加するメソッド
+
+   
+    def export_loading_plan_to_excel(self, plan_result: Dict[str, Any], 
+                                     export_format: str = 'daily') -> BytesIO:
+        """
+        積載計画をExcelファイルとして出力
+        
+        Args:
+            plan_result: 積載計画データ
+            export_format: 'daily' (日別) または 'weekly' (週別)
+        
+        Returns:
+            BytesIO: Excelファイルのバイナリデータ
+        """
+        
+        output = BytesIO()
+        
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            # 1. サマリーシート
+            summary_df = pd.DataFrame([{
+                '項目': k,
+                '値': v
+            } for k, v in plan_result['summary'].items()])
+            summary_df.to_excel(writer, sheet_name='サマリー', index=False)
+            
+            # 2. 日別計画シート
+            if export_format == 'daily':
+                self._export_daily_plan(writer, plan_result)
+            elif export_format == 'weekly':
+                self._export_weekly_plan(writer, plan_result)
+            
+            # 3. 積載不可アイテムシート
+            if plan_result.get('unloaded_tasks'):
+                unloaded_df = pd.DataFrame([{
+                    '製品コード': task['product_code'],
+                    '製品名': task['product_name'],
+                    '容器数': task['num_containers'],
+                    '合計数量': task['total_quantity'],
+                    '納期': task['delivery_date'].strftime('%Y-%m-%d')
+                } for task in plan_result['unloaded_tasks']])
+                unloaded_df.to_excel(writer, sheet_name='積載不可', index=False)
+            
+            # 4. 警告一覧シート
+            warnings_data = []
+            for date_str, plan in plan_result['daily_plans'].items():
+                for warning in plan.get('warnings', []):
+                    warnings_data.append({
+                        '日付': date_str,
+                        '警告内容': warning
+                    })
+            
+            if warnings_data:
+                warnings_df = pd.DataFrame(warnings_data)
+                warnings_df.to_excel(writer, sheet_name='警告一覧', index=False)
+        
+        output.seek(0)
+        return output
+    
+    def _export_daily_plan(self, writer, plan_result):
+        """日別計画をExcelシートに出力"""
+        
+        daily_data = []
+        
+        for date_str in sorted(plan_result['daily_plans'].keys()):
+            plan = plan_result['daily_plans'][date_str]
+            
+            for truck in plan.get('trucks', []):
+                for item in truck.get('loaded_items', []):
+                    daily_data.append({
+                        '積載日': date_str,
+                        'トラック名': truck['truck_name'],
+                        '製品コード': item.get('product_code', ''),
+                        '製品名': item.get('product_name', ''),
+                        '容器数': item.get('num_containers', 0),
+                        '合計数量': item.get('total_quantity', 0),
+                        '納期': item['delivery_date'].strftime('%Y-%m-%d') if 'delivery_date' in item else '',
+                        '体積積載率': f"{truck['utilization']['volume_rate']}%",
+                        '重量積載率': f"{truck['utilization']['weight_rate']}%"
+                    })
+        
+        if daily_data:
+            daily_df = pd.DataFrame(daily_data)
+            daily_df.to_excel(writer, sheet_name='日別計画', index=False)
+    
+    def _export_weekly_plan(self, writer, plan_result):
+        """週別計画をExcelシートに出力"""
+        
+        from datetime import datetime
+        
+        weekly_data = {}
+        
+        for date_str in sorted(plan_result['daily_plans'].keys()):
+            date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+            week_num = date_obj.isocalendar()[1]  # ISO週番号
+            week_key = f"{date_obj.year}年第{week_num}週"
+            
+            if week_key not in weekly_data:
+                weekly_data[week_key] = []
+            
+            plan = plan_result['daily_plans'][date_str]
+            
+            for truck in plan.get('trucks', []):
+                for item in truck.get('loaded_items', []):
+                    weekly_data[week_key].append({
+                        '週': week_key,
+                        '積載日': date_str,
+                        'トラック名': truck['truck_name'],
+                        '製品コード': item.get('product_code', ''),
+                        '製品名': item.get('product_name', ''),
+                        '容器数': item.get('num_containers', 0),
+                        '合計数量': item.get('total_quantity', 0)
+                    })
+        
+        # 各週のシートを作成
+        for week_key, items in weekly_data.items():
+            if items:
+                week_df = pd.DataFrame(items)
+                sheet_name = week_key[:31]  # Excelシート名の制限
+                week_df.to_excel(writer, sheet_name=sheet_name, index=False)
+    
+    def export_loading_plan_to_csv(self, plan_result: Dict[str, Any]) -> str:
+        """
+        積載計画をCSV形式で出力
+        
+        Returns:
+            str: CSV文字列
+        """
+        
+        daily_data = []
+        
+        for date_str in sorted(plan_result['daily_plans'].keys()):
+            plan = plan_result['daily_plans'][date_str]
+            
+            for truck in plan.get('trucks', []):
+                for item in truck.get('loaded_items', []):
+                    daily_data.append({
+                        '積載日': date_str,
+                        'トラック名': truck['truck_name'],
+                        '製品コード': item.get('product_code', ''),
+                        '製品名': item.get('product_name', ''),
+                        '容器数': item.get('num_containers', 0),
+                        '合計数量': item.get('total_quantity', 0),
+                        '納期': item['delivery_date'].strftime('%Y-%m-%d') if 'delivery_date' in item else '',
+                        '体積積載率': truck['utilization']['volume_rate'],
+                        '重量積載率': truck['utilization']['weight_rate']
+                    })
+        
+        if daily_data:
+            df = pd.DataFrame(daily_data)
+            return df.to_csv(index=False, encoding='utf-8-sig')
+        else:
+            return ""
