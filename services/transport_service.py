@@ -22,14 +22,11 @@ class TransportService:
         self.production_repo = ProductionRepository(db_manager)
         self.product_repo = ProductRepository(db_manager)
         
-        # ✅ 修正: db_managerを引数として渡す
         self.loading_plan_repo = LoadingPlanRepository(db_manager)
         self.delivery_progress_repo = DeliveryProgressRepository(db_manager)
         
         self.planner = TransportPlanner()
         self.validator = LoadingValidator()
-    
-        # ===== トラック・容器管理機能 =====
     
     def get_containers(self):
         """容器一覧取得"""
@@ -65,60 +62,36 @@ class TransportService:
         """トラック作成"""
         return self.transport_repo.save_truck(truck_data)
     
-    # ===== 積載計画機能 =====
-    
     def calculate_loading_plan_from_orders(self, 
                                           start_date: date, 
                                           days: int = 7,
                                           use_delivery_progress: bool = True) -> Dict[str, Any]:
         """
         オーダー情報から積載計画を自動作成
-        
-        Args:
-            start_date: 計画開始日
-            days: 計画日数（デフォルト7日間）
-            use_delivery_progress: 納入進度テーブルを使用するか（True推奨）
-        
-        Returns:
-            日別積載計画
         """
         
         end_date = start_date + timedelta(days=days - 1)
         
-        # ✅ 修正: 納入進度テーブルがあればそれを優先、なければ生産指示テーブルを使用
         if use_delivery_progress:
             orders_df = self.delivery_progress_repo.get_delivery_progress(start_date, end_date)
             
             if orders_df.empty:
-                print("⚠️ 納入進度データがありません。生産指示データを使用します。")
                 orders_df = self.production_repo.get_production_instructions(start_date, end_date)
                 
-                # ✅ カラム名を統一（必須）
                 if not orders_df.empty:
                     orders_df = orders_df.rename(columns={
                         'instruction_date': 'delivery_date',
                         'instruction_quantity': 'order_quantity'
                     })
-            else:
-                print(f"✅ 納入進度データを使用: {len(orders_df)}件")
         else:
-            # 生産指示テーブルから取得
             orders_df = self.production_repo.get_production_instructions(start_date, end_date)
             
-            # ✅ カラム名を統一（必須）
             if not orders_df.empty:
                 orders_df = orders_df.rename(columns={
                     'instruction_date': 'delivery_date',
                     'instruction_quantity': 'order_quantity'
                 })
         
-        # ✅ デバッグ情報
-        if not orders_df.empty:
-            print(f"📊 オーダーデータ: {len(orders_df)}件")
-            print(f"📊 カラム: {orders_df.columns.tolist()}")
-            print(f"📊 サンプル: {orders_df.head(1).to_dict()}")
-        
-        # データ確認
         if orders_df is None or orders_df.empty:
             return {
                 'daily_plans': {},
@@ -138,7 +111,6 @@ class TransportService:
         trucks_df = self.get_trucks()
         truck_container_rules = self.transport_repo.get_truck_container_rules()
         
-        # 積載計画計算
         result = self.planner.calculate_loading_plan_from_orders(
             orders_df=orders_df,
             products_df=products_df,
@@ -167,8 +139,6 @@ class TransportService:
         """積載計画を削除"""
         return self.loading_plan_repo.delete_loading_plan(plan_id)
     
-    # ===== 納入進度機能（新規） =====
-    
     def get_delivery_progress(self, start_date: date = None, end_date: date = None) -> pd.DataFrame:
         """納入進度取得"""
         return self.delivery_progress_repo.get_delivery_progress(start_date, end_date)
@@ -196,40 +166,27 @@ class TransportService:
     def get_shipment_records(self, progress_id: int = None) -> pd.DataFrame:
         """出荷実績を取得"""
         return self.delivery_progress_repo.get_shipment_records(progress_id)
-
-# services/transport_service.py に追加するメソッド
-
    
     def export_loading_plan_to_excel(self, plan_result: Dict[str, Any], 
                                      export_format: str = 'daily') -> BytesIO:
         """
         積載計画をExcelファイルとして出力
-        
-        Args:
-            plan_result: 積載計画データ
-            export_format: 'daily' (日別) または 'weekly' (週別)
-        
-        Returns:
-            BytesIO: Excelファイルのバイナリデータ
         """
         
         output = BytesIO()
         
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # 1. サマリーシート
             summary_df = pd.DataFrame([{
                 '項目': k,
                 '値': v
             } for k, v in plan_result['summary'].items()])
             summary_df.to_excel(writer, sheet_name='サマリー', index=False)
             
-            # 2. 日別計画シート
             if export_format == 'daily':
                 self._export_daily_plan(writer, plan_result)
             elif export_format == 'weekly':
                 self._export_weekly_plan(writer, plan_result)
             
-            # 3. 積載不可アイテムシート
             if plan_result.get('unloaded_tasks'):
                 unloaded_df = pd.DataFrame([{
                     '製品コード': task['product_code'],
@@ -240,7 +197,6 @@ class TransportService:
                 } for task in plan_result['unloaded_tasks']])
                 unloaded_df.to_excel(writer, sheet_name='積載不可', index=False)
             
-            # 4. 警告一覧シート
             warnings_data = []
             for date_str, plan in plan_result['daily_plans'].items():
                 for warning in plan.get('warnings', []):
@@ -291,7 +247,7 @@ class TransportService:
         
         for date_str in sorted(plan_result['daily_plans'].keys()):
             date_obj = datetime.strptime(date_str, '%Y-%m-%d')
-            week_num = date_obj.isocalendar()[1]  # ISO週番号
+            week_num = date_obj.isocalendar()[1]
             week_key = f"{date_obj.year}年第{week_num}週"
             
             if week_key not in weekly_data:
@@ -311,19 +267,15 @@ class TransportService:
                         '合計数量': item.get('total_quantity', 0)
                     })
         
-        # 各週のシートを作成
         for week_key, items in weekly_data.items():
             if items:
                 week_df = pd.DataFrame(items)
-                sheet_name = week_key[:31]  # Excelシート名の制限
+                sheet_name = week_key[:31]
                 week_df.to_excel(writer, sheet_name=sheet_name, index=False)
     
     def export_loading_plan_to_csv(self, plan_result: Dict[str, Any]) -> str:
         """
         積載計画をCSV形式で出力
-        
-        Returns:
-            str: CSV文字列
         """
         
         daily_data = []

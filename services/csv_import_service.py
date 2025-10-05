@@ -13,16 +13,9 @@ class CSVImportService:
                        create_progress: bool = True) -> Tuple[bool, str]:
         """CSVファイルからデータを読み込み、データベースにインポート"""
         try:
-            print("=" * 80)
-            print("🔍 CSVインポート開始")
-            print("=" * 80)
-            
             # ファイルを読み込み
             df = pd.read_csv(uploaded_file, encoding='shift_jis', dtype=str)
             df = df.fillna('')
-            
-            print(f"✅ CSV読み込み成功: {len(df)}行")
-            print(f"📊 カラム一覧: {df.columns.tolist()}")
             
             # 数値カラムを変換
             for col in ['データＮＯ', '取引先', '収容数', 'リードタイム', '定点日数']:
@@ -33,69 +26,34 @@ class CSVImportService:
             v2_rows = df[df['レコード識別'] == 'V2']
             v3_rows = df[df['レコード識別'] == 'V3']
             
-            print(f"📋 V2行（日付）: {len(v2_rows)}行")
-            print(f"📋 V3行（数量）: {len(v3_rows)}行")
-            
             if len(v3_rows) == 0:
                 return False, "V3行（数量データ）が見つかりませんでした"
             
-            # サンプルデータ表示
-            if len(v3_rows) > 0:
-                print("\n🔍 V3行サンプル（最初の1行）:")
-                sample = v3_rows.iloc[0]
-                print(f"  データＮＯ: {sample.get('データＮＯ')}")
-                print(f"  品番: {sample.get('品番')}")
-                print(f"  品名: {sample.get('品名')}")
-                print(f"  検査区分: {sample.get('検査区分')}")
-                print(f"  スタート月度: {sample.get('スタート月度')}")
-            
             # 上書きモードの場合は既存データを削除
             if update_mode:
-                print("\n🗑️ 既存データを削除中...")
                 self._clear_existing_data()
-                print("✅ 既存データ削除完了")
             
             # 製品情報をインポート
-            print("\n📦 製品情報をインポート中...")
             product_ids = self._import_basic_data(v3_rows)
             
             if not product_ids:
                 return False, "製品情報のインポートに失敗しました"
             
-            print(f"✅ 製品情報インポート完了: {len(product_ids)}製品")
-            
             # 生産指示データを処理
-            print("\n📅 生産指示データを処理中...")
             success, count = self._process_instruction_data(v2_rows, v3_rows, product_ids)
             
             if not success:
                 return False, "データインポートに失敗しました"
             
-            print(f"✅ 生産指示データ処理完了: {count}件")
-            
             # 納入進度データも作成
             if create_progress:
-                print("\n📋 納入進度データを作成中...")
                 progress_count = self._create_delivery_progress(v2_rows, v3_rows, product_ids)
-                print(f"✅ 納入進度データ作成完了: {progress_count}件")
-                
-                print("\n" + "=" * 80)
-                print(f"🎉 インポート完了: 指示{count}件 + 進度{progress_count}件")
-                print("=" * 80)
-                
                 return True, f"{count}件の指示データと{progress_count}件の進度データを登録しました"
             else:
-                print("\n" + "=" * 80)
-                print(f"🎉 インポート完了: 指示{count}件")
-                print("=" * 80)
-                
                 return True, f"{count}件の指示データを登録しました"
         
         except Exception as e:
             error_msg = f"CSVインポートエラー: {str(e)}"
-            print(f"❌ {error_msg}")
-            import traceback
-            traceback.print_exc()
             return False, error_msg
     
     def _clear_existing_data(self):
@@ -108,7 +66,7 @@ class CSVImportService:
             session.commit()
         except Exception as e:
             session.rollback()
-            print(f"データクリアエラー: {e}")
+            raise e
         finally:
             session.close()
     
@@ -123,18 +81,6 @@ class CSVImportService:
             for _, row in df.iterrows():
                 unique_key = (int(row['データＮＯ']), row['品番'], row['検査区分'])
                 
-                # # 既存チェック DATA_NO + 品番 + 検査区分 の組み合わせで一意
-                # result = session.execute(text("""
-                #     SELECT id FROM products 
-                #     WHERE data_no = :data_no 
-                #     AND product_code = :product_code 
-                #     AND inspection_category = :inspection_category
-                # """), {
-                #     'data_no': unique_key[0],
-                #     'product_code': unique_key[1],
-                #     'inspection_category': unique_key[2]
-                # }).fetchone()
-                #
                 result = session.execute(text("""
                     SELECT id FROM products 
                     WHERE data_no = :data_no 
@@ -207,26 +153,14 @@ class CSVImportService:
         
         except Exception as e:
             session.rollback()
-            print(f"製品インポートエラー: {e}")
-            import traceback
-            traceback.print_exc()
-            return {}
+            raise e
         finally:
             session.close()
     
     def _process_instruction_data(self, v2_rows: pd.DataFrame, 
                                   v3_rows: pd.DataFrame, 
                                   product_ids: Dict) -> Tuple[bool, int]:
-        """生産指示データを処理 - デバッグ強化版"""
-        
-        print("\n" + "="*60)
-        print("🚨 _process_instruction_data 実行開始")
-        print(f"V2行数: {len(v2_rows)}")
-        print(f"V3行数: {len(v3_rows)}")
-        print(f"製品ID辞書サイズ: {len(product_ids)}")
-        print(f"製品ID辞書キー例: {list(product_ids.keys())[:3]}")
-        print("="*60 + "\n")
-        
+        """生産指示データを処理"""
         session = self.db.get_session()
         instruction_count = 0
         
@@ -237,11 +171,7 @@ class CSVImportService:
                 unique_key = (int(v3_row['データＮＯ']), v3_row['品番'], v3_row['検査区分'])
                 product_id = product_ids.get(unique_key)
                 
-                print(f"\n処理中 [{idx+1}/{len(v3_rows)}]: {unique_key}")
-                print(f"  製品ID: {product_id}")
-                
                 if not product_id:
-                    print(f"  ⚠️ 製品ID未取得 - スキップ")
                     continue
                 
                 # V2行とマッチング（型を統一）
@@ -251,17 +181,11 @@ class CSVImportService:
                     (v2_rows['検査区分'].astype(str) == str(v3_row['検査区分']))
                 ]
                 
-                print(f"  V2マッチ数: {len(v2_match)}")
-                
                 if len(v2_match) == 0:
-                    print(f"  ⚠️ V2行が見つかりません - スキップ")
                     continue
                 
                 v2_row = v2_match.iloc[0]
                 start_month = v3_row['スタート月度']
-                
-                print(f"  開始月度: {start_month}")
-                print(f"  → 3ヶ月分のデータを処理...")
                 
                 # 3ヶ月分のデータを処理
                 count_first = self._process_month_data(
@@ -274,21 +198,13 @@ class CSVImportService:
                     session, product_id, v2_row, v3_row, 'next_next', 89, 120, start_month
                 )
                 
-                total = count_first + count_next + count_next_next
-                instruction_count += total
-                
-                print(f"  ✅ 合計: {total}件 (初月:{count_first}, 次月:{count_next}, 次々月:{count_next_next})")
+                instruction_count += count_first + count_next + count_next_next
             
             session.commit()
-            print(f"\n🎉 トータル {instruction_count}件の生産指示を登録")
-            
             return True, instruction_count
         
         except Exception as e:
             session.rollback()
-            print(f"❌ 生産指示処理エラー: {e}")
-            import traceback
-            traceback.print_exc()
             return False, 0
         finally:
             session.close()
@@ -307,8 +223,6 @@ class CSVImportService:
         
         total_quantity = int(v3_row[total_col]) if str(v3_row[total_col]).strip() else 0
         
-        print(f"    {month_type}: カラム{start_col}〜{end_col}, 合計数量:{total_quantity}")
-        
         # 月次サマリー
         session.execute(text("""
             INSERT INTO monthly_summary (product_id, month_type, total_quantity, month_year)
@@ -323,29 +237,17 @@ class CSVImportService:
         
         # 日次データ
         day_count = 1
-        valid_count = 0
-        
-        print(f"    V2行長さ:{len(v2_row)}, 処理範囲:{start_col}〜{min(end_col, len(v2_row))}")
         
         for i in range(start_col, min(end_col, len(v2_row))):
             try:
                 date_str = str(v2_row.iloc[i]).strip()
                 quantity_str = str(v3_row.iloc[i]).strip()
                 
-                # 最初の3件だけ詳細表示
-                if valid_count < 3:
-                    print(f"      [{i}] 日付:'{date_str}', 数量:'{quantity_str}'")
-                
                 if date_str and date_str not in ['', 'nan'] and quantity_str and quantity_str not in ['0', 'nan', '']:
                     instruction_date = self._parse_japanese_date(date_str)
                     quantity = int(float(quantity_str))
                     
                     if instruction_date and quantity > 0:
-                        if valid_count < 3:
-                            print(f"        → OK: {instruction_date}, {quantity}件")
-                        
-                        valid_count += 1
-                        
                         session.execute(text("""
                             REPLACE INTO production_instructions_detail 
                             (product_id, record_type, start_month, total_first_month, 
@@ -371,12 +273,8 @@ class CSVImportService:
                         instruction_count += 1
                         day_count += 1
             
-            except Exception as e:
-                if valid_count < 3:
-                    print(f"        ⚠️ エラー: {e}")
+            except Exception:
                 continue
-        
-        print(f"    → 登録: {instruction_count}件")
         
         return instruction_count
     
@@ -387,8 +285,6 @@ class CSVImportService:
         
         try:
             from sqlalchemy import text
-            
-            print("\n🔄 納入進度データを作成中...")
             
             # production_instructions_detail から日次データを取得
             for product_key, product_id in product_ids.items():
@@ -436,8 +332,8 @@ class CSVImportService:
                         """), {
                             'order_id': order_id,
                             'product_id': product_id,
-                            'order_date': instruction_date,  # 受注日=指示日
-                            'delivery_date': instruction_date,  # 納期=指示日
+                            'order_date': instruction_date,
+                            'delivery_date': instruction_date,
                             'order_quantity': quantity,
                             'customer_code': f'C{data_no:03d}',
                             'customer_name': f'取引先{data_no}'
@@ -446,15 +342,10 @@ class CSVImportService:
                         progress_count += 1
             
             session.commit()
-            print(f"✅ 納入進度登録完了: {progress_count}件")
-            
             return progress_count
         
         except Exception as e:
             session.rollback()
-            print(f"❌ 納入進度作成エラー: {e}")
-            import traceback
-            traceback.print_exc()
             return 0
         finally:
             session.close()
@@ -466,22 +357,19 @@ class CSVImportService:
         
         try:
             # フォーマット1: 5桁数字（例: 50801 → 2025年8月1日）
-            # 形式: YMMDD（Yは下1桁の年、MMは月、DDは日）
             if date_str.isdigit() and len(date_str) == 5:
-                year_last_digit = int(date_str[0])  # 最初の1桁（例: 5）
-                month = int(date_str[1:3])           # 月（例: 08）
-                day = int(date_str[3:5])             # 日（例: 01）
+                year_last_digit = int(date_str[0])
+                month = int(date_str[1:3])
+                day = int(date_str[3:5])
                 
-                # 2020年代と仮定（5 → 2025）
                 year = 2020 + year_last_digit
-                
                 date_obj = datetime(year, month, day)
                 return date_obj.date()
             
             # フォーマット2: R06/12/02形式（令和6年12月2日）
             elif date_str.startswith('R'):
                 reiwa_year = int(date_str[1:3])
-                year = 2018 + reiwa_year  # 令和元年=2019
+                year = 2018 + reiwa_year
                 month_day = date_str[4:]
                 date_obj = datetime.strptime(f"{year}/{month_day}", '%Y/%m/%d')
                 return date_obj.date()
@@ -493,7 +381,7 @@ class CSVImportService:
             
             return None
         
-        except Exception as e:
+        except Exception:
             return None
     
     def get_import_history(self) -> List[Dict]:
@@ -510,8 +398,7 @@ class CSVImportService:
             
             return [{'ID': r[0], 'ファイル名': r[1], 'インポート日時': r[2], 
                     '登録件数': r[3], 'ステータス': r[4], 'メッセージ': r[5]} for r in result]
-        except Exception as e:
-            print(f"履歴取得エラー: {e}")
+        except Exception:
             return []
         finally:
             session.close()
@@ -537,8 +424,7 @@ class CSVImportService:
                 'message': message
             })
             session.commit()
-        except Exception as e:
+        except Exception:
             session.rollback()
-            print(f"履歴記録エラー: {e}")
         finally:
             session.close()

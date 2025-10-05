@@ -46,7 +46,7 @@ class CSVImportPage:
             # プレビュー表示
             try:
                 df_preview = pd.read_csv(uploaded_file, encoding='shift_jis', nrows=10)
-                uploaded_file.seek(0)  # ファイルポインタをリセット
+                uploaded_file.seek(0)
                 
                 st.subheader("📋 プレビュー（先頭10行）")
                 st.dataframe(df_preview, use_container_width=True)
@@ -93,11 +93,7 @@ class CSVImportPage:
                     if st.button("🔄 インポート実行", type="primary", use_container_width=True):
                         with st.spinner("データをインポート中..."):
                             try:
-                                # ✅ デバッグ: ファイルポインタをリセット
                                 uploaded_file.seek(0)
-                                
-                                # ✅ デバッグ情報を表示
-                                st.info("インポート処理を開始します...")
                                 
                                 success, message = self.import_service.import_csv_data(
                                     uploaded_file,
@@ -109,26 +105,14 @@ class CSVImportPage:
                                     st.success(f"✅ {message}")
                                     st.balloons()
                                     
-                                    # インポート履歴に記録
                                     self._log_import_history(uploaded_file.name, message)
                                     
-                                    # 再読み込みを促す
                                     st.info("💡 「配送便計画」ページでデータを確認してください")
                                 else:
                                     st.error(f"❌ {message}")
-                                    
-                                    # デバッグ情報表示
-                                    with st.expander("🔍 デバッグ情報"):
-                                        st.write("エラーの原因を確認してください：")
-                                        st.write("- ファイルがShift-JIS形式か")
-                                        st.write("- レコード識別（V2/V3）が正しいか")
-                                        st.write("- 必須カラムが存在するか")
                             
                             except Exception as e:
                                 st.error(f"予期しないエラー: {e}")
-                                import traceback
-                                with st.expander("エラー詳細"):
-                                    st.code(traceback.format_exc())
                 
                 with col_btn2:
                     if st.button("🗑️ キャンセル", use_container_width=True):

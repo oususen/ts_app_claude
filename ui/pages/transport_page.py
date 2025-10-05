@@ -1,7 +1,7 @@
 # app/ui/pages/transport_page.py
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime,timedelta
+from datetime import date, datetime, timedelta
 from typing import Dict
 from ui.components.forms import FormComponents
 from ui.components.tables import TableComponents
@@ -69,10 +69,8 @@ class TransportPage:
                         days=days
                     )
                     
-                    # セッションに保存
                     st.session_state['loading_plan'] = result
                     
-                    # サマリー表示
                     summary = result['summary']
                     
                     st.success("✅ 積載計画を作成しました")
@@ -88,7 +86,6 @@ class TransportPage:
                         status_color = "🟢" if summary['status'] == '正常' else "🟡"
                         st.metric("ステータス", f"{status_color} {summary['status']}")
                     
-                    # 積載できなかったタスクを表示
                     if result['unloaded_tasks']:
                         st.error(f"⚠️ 積載できなかった製品: {len(result['unloaded_tasks'])}件")
                         
@@ -108,64 +105,11 @@ class TransportPage:
                         - 容器・トラックの容量を確認してください
                         """)
                     
-                    # 計画確認タブへ移動を促す
                     st.info("詳細は「📊 計画確認」タブでご確認ください")
-
-                    
-                    # 保存とExcel出力(一時無効化 理由機能不全、UI整理　など )
-                    # st.markdown("---")
-                    # st.subheader("💾 計画の保存・出力")
-                    
-                    # col_save1, col_save2, col_save3 = st.columns([3, 1, 1])
-                    
-                    # with col_save1:
-                    #     plan_name = st.text_input(
-                    #         "計画名",
-                    #         value=f"積載計画_{start_date.strftime('%Y%m%d')}",
-                    #         help="この計画に名前を付けて保存します"
-                    #     )
-                    
-                    # with col_save2:
-                    #     st.write("")
-                    #     st.write("")
-                    #     if st.button("💾 DBに保存", type="primary", use_container_width=True):
-                    #         try:
-                    #             plan_id = self.service.save_loading_plan(result, plan_name)
-                    #             st.success(f"✅ 計画を保存しました (ID: {plan_id})")
-                    #             st.session_state['saved_plan_id'] = plan_id
-                    #         except Exception as e:
-                    #             st.error(f"保存エラー: {e}")
-                    
-                    # with col_save3:
-                    #     st.write("")
-                    #     st.write("")
-                    #     if st.button("📥 Excel出力", type="secondary", use_container_width=True):
-                    #         try:
-                    #             from services.excel_export_service import ExcelExportService
-                                
-                    #             excel_service = ExcelExportService()
-                    #             excel_data = excel_service.export_loading_plan(result)
-                                
-                    #             st.download_button(
-                    #                 label="📥 ダウンロード",
-                    #                 data=excel_data,
-                    #                 file_name=f"積載計画_{start_date.strftime('%Y%m%d')}_{datetime.now().strftime('%H%M%S')}.xlsx",
-                    #                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    #                 type="primary"
-                    #             )
-                    #             st.success("✅ Excelファイルを生成しました")
-                    #         except ImportError:
-                    #             st.error("❌ openpyxlがインストールされていません。`pip install openpyxl`を実行してください")
-                    #         except Exception as e:
-                    #             st.error(f"Excel出力エラー: {e}")
-                    #             import traceback
-                    #             st.code(traceback.format_exc())
                     
                 except Exception as e:
                     st.error(f"積載計画作成エラー: {e}")
-                    import traceback
-                    st.code(traceback.format_exc())                    
-        # 計画保存・エクスポートセクション
+                    
         if 'loading_plan' in st.session_state:
             result = st.session_state['loading_plan']
             
@@ -217,7 +161,7 @@ class TransportPage:
             
             with col_export3:
                 st.write("**CSV出力**")
-                st.write("")  # スペース調整
+                st.write("")
                 
                 if st.button("📄 CSVダウンロード", type="secondary"):
                     try:
@@ -238,7 +182,6 @@ class TransportPage:
         """計画確認"""
         st.header("📊 積載計画確認")
         
-        # タブ: 現在の計画 / 保存済み計画
         view_tab1, view_tab2 = st.tabs(["現在の計画", "保存済み計画"])
         
         with view_tab1:
@@ -257,7 +200,6 @@ class TransportPage:
         result = st.session_state['loading_plan']
         daily_plans = result['daily_plans']
         
-        # 表示形式選択
         view_type = st.radio(
             "表示形式",
             options=['日別表示', '一覧表示'],
@@ -290,33 +232,25 @@ class TransportPage:
             
             if selected_plan:
                 self._display_saved_plan(selected_plan)
-            else:
-                st.warning("計画が選択されていません")
         
         except Exception as e:
             st.error(f"保存済み計画表示エラー: {e}")
-            import traceback
-            st.code(traceback.format_exc())
     
     def _display_saved_plan(self, plan_data: Dict):
-        """保存済み計画を表示 - 修正版"""
+        """保存済み計画を表示"""
         try:
             st.subheader("計画詳細")
             
-            # ✅ 安全なデータアクセス
             summary = plan_data.get('summary', {})
             daily_plans = plan_data.get('daily_plans', {})
             unloaded_tasks = plan_data.get('unloaded_tasks', [])
             
-            # ✅ 必須キーのデフォルト値
             total_trips = summary.get('total_trips', 0)
-            
             total_days = summary.get('total_days', 0)
             status = summary.get('status', '不明')
             unloaded_count = summary.get('unloaded_count', 0)
             total_warnings = summary.get('total_warnings', 0)
             
-            # ヘッダー情報
             col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("計画期間", f"{total_days}日")
@@ -327,11 +261,9 @@ class TransportPage:
             with col4:
                 st.metric("警告数", total_warnings)
             
-            # 期間表示
             period = plan_data.get('period', '期間未設定')
             st.write(f"**計画期間:** {period}")
             
-            # 日別計画表示
             st.subheader("📅 日別積載計画")
             
             if not daily_plans:
@@ -342,13 +274,11 @@ class TransportPage:
                 day_plan = daily_plans[date_str]
                 
                 with st.expander(f"{date_str} - {day_plan.get('total_trips', 0)}便"):
-                    # 警告表示
                     warnings = day_plan.get('warnings', [])
                     if warnings:
                         for warning in warnings:
                             st.warning(f"⚠️ {warning}")
                     
-                    # トラック表示
                     trucks = day_plan.get('trucks', [])
                     if not trucks:
                         st.info("この日は積載計画がありません")
@@ -357,7 +287,6 @@ class TransportPage:
                     for truck in trucks:
                         st.write(f"🚚 **{truck.get('truck_name', '不明なトラック')}**")
                         
-                        # 積載率
                         utilization = truck.get('utilization', {})
                         col_u1, col_u2 = st.columns(2)
                         with col_u1:
@@ -365,7 +294,6 @@ class TransportPage:
                         with col_u2:
                             st.metric("重量率", f"{utilization.get('weight_rate', 0)}%")
                         
-                        # 積載アイテム
                         items = truck.get('loaded_items', [])
                         if items:
                             for item in items:
@@ -375,7 +303,6 @@ class TransportPage:
                         
                         st.markdown("---")
             
-            # 積載不可アイテム表示
             if unloaded_tasks:
                 st.subheader("❌ 積載不可アイテム")
                 for task in unloaded_tasks:
@@ -383,9 +310,6 @@ class TransportPage:
                     
         except Exception as e:
             st.error(f"計画表示エラー: {str(e)}")
-            # デバッグ情報
-            with st.expander("デバッグ情報"):
-                st.json(plan_data)
     
     def _show_daily_view(self, daily_plans):
         """日別表示"""
@@ -393,20 +317,17 @@ class TransportPage:
         for date_str in sorted(daily_plans.keys()):
             plan = daily_plans[date_str]
             
-            # 先に全ての変数を取得
             trucks = plan.get('trucks', [])
             warnings = plan.get('warnings', [])
             total_trips = len(trucks)
             
             with st.expander(f"📅 {date_str} ({total_trips}便)", expanded=True):
                 
-                # 警告表示
                 if warnings:
                     st.warning("⚠️ 警告:")
                     for warning in warnings:
                         st.write(f"• {warning}")
                 
-                # トラック別表示
                 if not trucks:
                     st.info("この日の積載予定はありません")
                     continue
@@ -414,7 +335,6 @@ class TransportPage:
                 for i, truck_plan in enumerate(trucks, 1):
                     st.markdown(f"**🚛 便 #{i}: {truck_plan.get('truck_name', 'トラック名不明')}**")
                     
-                    # 積載率表示
                     util = truck_plan.get('utilization', {})
                     col_u1, col_u2 = st.columns(2)
                     with col_u1:
@@ -422,7 +342,6 @@ class TransportPage:
                     with col_u2:
                         st.metric("重量積載率", f"{util.get('weight_rate', 0)}%")
                     
-                    # 積載品表示
                     loaded_items = truck_plan.get('loaded_items', [])
                     if loaded_items:
                         items_df = pd.DataFrame([{
@@ -455,7 +374,6 @@ class TransportPage:
                 utilization = truck_plan.get('utilization', {})
                 
                 for item in loaded_items:
-                    # delivery_dateを安全に取得
                     delivery_date = item.get('delivery_date')
                     if delivery_date:
                         if hasattr(delivery_date, 'strftime'):
@@ -479,15 +397,16 @@ class TransportPage:
         
         if all_items:
             df = pd.DataFrame(all_items)
-            st.dataframe
-    
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("表示するデータがありません")
+
     def _show_container_management(self):
         """容器管理表示"""
         st.header("🧰 容器管理")
         st.write("積載に使用する容器の登録と管理を行います。")
 
         try:
-            # 新規容器登録
             st.subheader("新規容器登録")
             container_data = FormComponents.container_form()
 
@@ -499,7 +418,6 @@ class TransportPage:
                 else:
                     st.error("容器登録に失敗しました")
 
-            # 容器一覧表示
             st.subheader("登録済み容器一覧")
             containers = self.service.get_containers()
 
@@ -518,7 +436,6 @@ class TransportPage:
                             max_stack = getattr(container, 'max_stack', 1)
                             st.write(f"**最大段数:** {max_stack}段")
 
-                        # 更新フォーム
                         with st.form(f"edit_container_form_{container.id}"):
                             st.write("✏️ 容器情報を編集")
 
@@ -537,8 +454,7 @@ class TransportPage:
                                     "最大積み重ね段数", 
                                     min_value=1, 
                                     max_value=10, 
-                                    value=getattr(container, 'max_stack', 1),
-                                    help="積み重ね可能な最大段数"
+                                    value=getattr(container, 'max_stack', 1)
                                 )
 
                             submitted = st.form_submit_button("更新", type="primary")
@@ -559,7 +475,6 @@ class TransportPage:
                                 else:
                                     st.error("❌ 容器更新に失敗しました")
 
-                        # 削除ボタン
                         if st.button("🗑️ 削除", key=f"delete_container_{container.id}"):
                             success = self.service.delete_container(container.id)
                             if success:
@@ -568,7 +483,6 @@ class TransportPage:
                             else:
                                 st.error("容器削除に失敗しました")
 
-                # 統計
                 st.subheader("容器統計")
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -585,8 +499,6 @@ class TransportPage:
 
         except Exception as e:
             st.error(f"容器管理エラー: {e}")
-            import traceback
-            st.code(traceback.format_exc())
 
     def _show_truck_management(self):
         """トラック管理表示"""
@@ -594,7 +506,6 @@ class TransportPage:
         st.write("積載に使用するトラックの登録と管理を行います。")
 
         try:
-            # 新規トラック登録
             st.subheader("新規トラック登録")
             truck_data = FormComponents.truck_form()
 
@@ -606,7 +517,6 @@ class TransportPage:
                 else:
                     st.error("トラック登録に失敗しました")
 
-            # トラック一覧表示
             st.subheader("登録済みトラック一覧")
             trucks_df = self.service.get_trucks()
 
@@ -626,7 +536,6 @@ class TransportPage:
                             st.write(f"**到着時刻:** {truck['arrival_time']} (+{truck['arrival_day_offset']}日)")
                             st.write(f"**デフォルト便:** {'✅' if truck['default_use'] else '❌'}")
 
-                        # 更新フォーム
                         with st.form(f"edit_truck_form_{truck['id']}"):
                             st.write("✏️ トラック情報を編集")
 
@@ -646,8 +555,7 @@ class TransportPage:
                                     "到着日オフセット（日）", 
                                     min_value=0, 
                                     max_value=7, 
-                                    value=int(truck['arrival_day_offset']),
-                                    help="翌日到着なら1、当日到着なら0"
+                                    value=int(truck['arrival_day_offset'])
                                 )
                                 new_default = st.checkbox("デフォルト便", value=bool(truck['default_use']))
 
@@ -671,7 +579,6 @@ class TransportPage:
                                 else:
                                     st.error("❌ トラック更新に失敗しました")
 
-                        # 削除ボタン
                         if st.button("🗑️ 削除", key=f"delete_truck_{truck['id']}"):
                             success = self.service.delete_truck(truck['id'])
                             if success:
@@ -685,128 +592,3 @@ class TransportPage:
 
         except Exception as e:
             st.error(f"トラック管理エラー: {e}")
-            import traceback
-            st.code(traceback.format_exc())
-
-
-    def display_loading_plan_result(self, plan_result):
-        """積載計画結果を安全に表示"""
-        try:
-            if not plan_result:
-                st.error("計画データがありません")
-                return
-            
-            # ✅ 安全なデータアクセス
-            summary = plan_result.get('summary', {})
-            daily_plans = plan_result.get('daily_plans', {})
-            
-            # ✅ デフォルト値を使用
-            total_trips = summary.get('total_trips', 0)
-            total_days = summary.get('total_days', 0)
-            status = summary.get('status', 'データなし')
-            unloaded_count = summary.get('unloaded_count', 0)
-            
-            # サマリー表示
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("総便数", total_trips)
-            with col2:
-                st.metric("計画日数", total_days)
-            with col3:
-                st.metric("未積載数", unloaded_count)
-            with col4:
-                st.metric("ステータス", status)
-            
-            # 期間表示
-            period = plan_result.get('period', '期間未設定')
-            st.write(f"**計画期間:** {period}")
-            
-        except Exception as e:
-            st.error(f"計画表示エラー: {str(e)}")
-            # デバッグ情報
-            st.write("デバッグ情報:")
-            st.json(plan_result if plan_result else "計画データなし")
-
-
-    def _display_plan_summary(self, plan_result):
-        """計画サマリーを超安全に表示"""
-        try:
-            if not plan_result:
-                st.error("計画データがありません")
-                return
-            
-            # ✅ 超安全なデータアクセス
-            summary = plan_result.get('summary', {})
-            daily_plans = plan_result.get('daily_plans', {})
-            
-            # ✅ デフォルト値の設定
-            total_trips = summary.get('total_trips', 0)
-            total_days = summary.get('total_days', 0)
-            status = summary.get('status', '不明')
-            unloaded_count = summary.get('unloaded_count', 0)
-            total_warnings = summary.get('total_warnings', 0)
-            
-            # サマリー表示
-            st.success("✅ 積載計画を作成しました！")
-            
-            # メトリクス表示
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("総便数", total_trips)
-            with col2:
-                st.metric("計画日数", total_days)
-            with col3:
-                st.metric("未積載数", unloaded_count)
-            with col4:
-                st.metric("警告数", total_warnings)
-            
-            # ステータス表示
-            st.metric("ステータス", status)
-            
-            # 期間表示
-            period = plan_result.get('period', '期間未設定')
-            st.write(f"**計画期間:** {period}")
-            
-            # デバッグ情報（折りたたみ）
-            with st.expander("デバッグ情報"):
-                st.json(summary)
-                
-        except Exception as e:
-            st.error(f"表示エラー: {str(e)}")
-            # 最小限の情報表示
-            st.write("緊急表示:")
-            #st.write(f"- 計画期間: {start_date} から {days}日間")
-            st.write("- ステータス: 表示エラー")
-
-
-    def display_plan_confirmation(self):
-        """計画確認画面 - 一時無効化"""
-        st.header("📋 積載計画確認")
-        st.info("🔧 計画確認機能は現在調整中です")
-        st.write("積載計画作成機能は正常に動作しています")
-        return
-
-        try:
-                st.header("📋 積載計画確認")
-                
-                # 保存済み計画の取得を試みる
-                try:
-                    saved_plans = self.transport_service.get_all_loading_plans()
-                except:
-                    saved_plans = []
-                
-                if not saved_plans:
-                    st.info("保存済みの計画がありません")
-                    st.write("まず「積載計画作成」で計画を作成してください")
-                    return
-                
-                # 簡易表示のみ
-                st.subheader("保存済み計画一覧")
-                for plan in saved_plans:
-                    st.write(f"- {plan.get('id')}: {plan.get('plan_name', '無名')}")
-            
-        except Exception as e:
-                st.error(f"計画確認エラー: {str(e)}")
-        
-
-    

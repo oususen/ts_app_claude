@@ -12,9 +12,7 @@ class ProductionRepository:
     def get_production_instructions(self, start_date: date = None, end_date: date = None) -> pd.DataFrame:
         """生産指示データ取得 - 完全修正版"""
         try:
-            print(f"🔍 デバッグ: オーダー取得開始 {start_date}〜{end_date}")
-            
-            # ✅ パラメータを文字列に変換（SQLインジェクション注意）
+            # パラメータを文字列に変換（SQLインジェクション注意）
             if start_date and end_date:
                 start_str = start_date.strftime('%Y-%m-%d')
                 end_str = end_date.strftime('%Y-%m-%d')
@@ -52,17 +50,11 @@ class ProductionRepository:
                 ORDER BY pid.instruction_date
                 """
             
-            print(f"🔍 デバッグ: 実行クエリ: {query[:200]}...")
-            
-            # ✅ パラメータなしで実行
+            # パラメータなしで実行
             result = self.db.execute_query(query)
             
-            print(f"🔍 デバッグ: データベース結果タイプ: {type(result)}")
-            print(f"🔍 デバッグ: データベース結果内容: {result}")
-            
-            # ✅ DataFrameに変換（安全なチェック）
+            # DataFrameに変換（安全なチェック）
             if result is None:
-                print("⚠️ 警告: データベース結果がNone")
                 return pd.DataFrame()
             
             if isinstance(result, pd.DataFrame):
@@ -73,26 +65,18 @@ class ProductionRepository:
                 df = pd.DataFrame(result)
             else:
                 # 空の場合
-                print("⚠️ 警告: オーダーデータが0件")
                 return pd.DataFrame()
             
-            # ✅ 空チェック
+            # 空チェック
             if df.empty:
-                print("⚠️ 警告: DataFrameが空")
                 return df
             
-            # ✅ 日付型に変換
+            # 日付型に変換
             if 'instruction_date' in df.columns:
                 df['instruction_date'] = pd.to_datetime(df['instruction_date']).dt.date
-            
-            print(f"✅ デバッグ: {len(df)}件のオーダーを取得")
-            print(f"✅ デバッグ: 日付範囲 {df['instruction_date'].min()}〜{df['instruction_date'].max()}")
-            print(f"✅ デバッグ: 製品ID一覧: {df['product_id'].unique()}")
             
             return df
                 
         except Exception as e:
             print(f"❌ オーダーデータ取得エラー: {e}")
-            import traceback
-            traceback.print_exc()
             return pd.DataFrame()
