@@ -160,7 +160,8 @@ class TransportRepository:
         finally:
             session.close()
 # app/repository/transport_repository.py の get_truck_container_rules メソッド
-
+    '''トラックと容器はサイズベースで計算するため、ルールは必須ではない
+    そのため、ルールが無くてもエラーにしないように修正
     def get_truck_container_rules(self):
         """トラック×容器ルールを取得 - 安全な実装"""
         try:
@@ -193,8 +194,42 @@ class TransportRepository:
         except Exception as e:
             print(f"❌ トラック容器ルール取得エラー: {e}")
             return []  # エラー時は空リストを返す
-    
-
+    '''
+    # repository/transport_repository.py の get_truck_container_rules()
+    # トラックと容器はサイズベースで計算するため、ルールは必須ではない
+    # そのため、ルールが無くてもエラーにしないように修正
+    def get_truck_container_rules(self):
+        """トラック×容器ルールを取得 - 安全な実装"""
+        try:
+            query = """
+            SELECT 
+                id, truck_id, container_id, max_quantity, created_at
+            FROM truck_container_rules
+            ORDER BY truck_id, container_id
+            """
+            
+            # ✅ 修正
+            result = self.db_manager.execute_query(query)
+            
+            if result.empty:
+                print("ℹ️ トラック容器ルールが未設定（サイズベースで計算します）")
+                return []
+            
+            rules = []
+            for _, row in result.iterrows():
+                rules.append({
+                    'id': row['id'],
+                    'truck_id': row['truck_id'],
+                    'container_id': row['container_id'],
+                    'max_quantity': row['max_quantity']
+                })
+            
+            print(f"✅ {len(rules)}件のトラック容器ルールを取得")
+            return rules
+            
+        except Exception as e:
+            print(f"⚠️ トラック容器ルール取得エラー（サイズベース計算を使用）: {e}")
+            return []
     def save_truck_container_rule(self, rule_data: dict) -> bool:
         session = self.db_manager.get_session()
         try:

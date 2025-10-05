@@ -112,54 +112,54 @@ class TransportPage:
                     st.info("詳細は「📊 計画確認」タブでご確認ください")
 
                     
-                    # 保存とExcel出力
-                    st.markdown("---")
-                    st.subheader("💾 計画の保存・出力")
+                    # 保存とExcel出力(一時無効化 理由機能不全、UI整理　など )
+                    # st.markdown("---")
+                    # st.subheader("💾 計画の保存・出力")
                     
-                    col_save1, col_save2, col_save3 = st.columns([3, 1, 1])
+                    # col_save1, col_save2, col_save3 = st.columns([3, 1, 1])
                     
-                    with col_save1:
-                        plan_name = st.text_input(
-                            "計画名",
-                            value=f"積載計画_{start_date.strftime('%Y%m%d')}",
-                            help="この計画に名前を付けて保存します"
-                        )
+                    # with col_save1:
+                    #     plan_name = st.text_input(
+                    #         "計画名",
+                    #         value=f"積載計画_{start_date.strftime('%Y%m%d')}",
+                    #         help="この計画に名前を付けて保存します"
+                    #     )
                     
-                    with col_save2:
-                        st.write("")
-                        st.write("")
-                        if st.button("💾 DBに保存", type="primary", use_container_width=True):
-                            try:
-                                plan_id = self.service.save_loading_plan(result, plan_name)
-                                st.success(f"✅ 計画を保存しました (ID: {plan_id})")
-                                st.session_state['saved_plan_id'] = plan_id
-                            except Exception as e:
-                                st.error(f"保存エラー: {e}")
+                    # with col_save2:
+                    #     st.write("")
+                    #     st.write("")
+                    #     if st.button("💾 DBに保存", type="primary", use_container_width=True):
+                    #         try:
+                    #             plan_id = self.service.save_loading_plan(result, plan_name)
+                    #             st.success(f"✅ 計画を保存しました (ID: {plan_id})")
+                    #             st.session_state['saved_plan_id'] = plan_id
+                    #         except Exception as e:
+                    #             st.error(f"保存エラー: {e}")
                     
-                    with col_save3:
-                        st.write("")
-                        st.write("")
-                        if st.button("📥 Excel出力", type="secondary", use_container_width=True):
-                            try:
-                                from services.excel_export_service import ExcelExportService
+                    # with col_save3:
+                    #     st.write("")
+                    #     st.write("")
+                    #     if st.button("📥 Excel出力", type="secondary", use_container_width=True):
+                    #         try:
+                    #             from services.excel_export_service import ExcelExportService
                                 
-                                excel_service = ExcelExportService()
-                                excel_data = excel_service.export_loading_plan(result)
+                    #             excel_service = ExcelExportService()
+                    #             excel_data = excel_service.export_loading_plan(result)
                                 
-                                st.download_button(
-                                    label="📥 ダウンロード",
-                                    data=excel_data,
-                                    file_name=f"積載計画_{start_date.strftime('%Y%m%d')}_{datetime.now().strftime('%H%M%S')}.xlsx",
-                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    type="primary"
-                                )
-                                st.success("✅ Excelファイルを生成しました")
-                            except ImportError:
-                                st.error("❌ openpyxlがインストールされていません。`pip install openpyxl`を実行してください")
-                            except Exception as e:
-                                st.error(f"Excel出力エラー: {e}")
-                                import traceback
-                                st.code(traceback.format_exc())
+                    #             st.download_button(
+                    #                 label="📥 ダウンロード",
+                    #                 data=excel_data,
+                    #                 file_name=f"積載計画_{start_date.strftime('%Y%m%d')}_{datetime.now().strftime('%H%M%S')}.xlsx",
+                    #                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    #                 type="primary"
+                    #             )
+                    #             st.success("✅ Excelファイルを生成しました")
+                    #         except ImportError:
+                    #             st.error("❌ openpyxlがインストールされていません。`pip install openpyxl`を実行してください")
+                    #         except Exception as e:
+                    #             st.error(f"Excel出力エラー: {e}")
+                    #             import traceback
+                    #             st.code(traceback.format_exc())
                     
                 except Exception as e:
                     st.error(f"積載計画作成エラー: {e}")
@@ -268,7 +268,7 @@ class TransportPage:
             self._show_daily_view(daily_plans)
         else:
             self._show_list_view(daily_plans)
-    
+     
     def _show_saved_plans(self):
         """保存済み計画表示"""
         
@@ -687,7 +687,7 @@ class TransportPage:
             st.error(f"トラック管理エラー: {e}")
             import traceback
             st.code(traceback.format_exc())
-# ui/pages/transport_page.py の計画表示部分
+
 
     def display_loading_plan_result(self, plan_result):
         """積載計画結果を安全に表示"""
@@ -727,7 +727,6 @@ class TransportPage:
             st.write("デバッグ情報:")
             st.json(plan_result if plan_result else "計画データなし")
 
-# ui/pages/transport_page.py の表示部分
 
     def _display_plan_summary(self, plan_result):
         """計画サマリーを超安全に表示"""

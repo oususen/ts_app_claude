@@ -13,6 +13,103 @@ class DeliveryProgressRepository:
     def __init__(self, db_manager: DatabaseManager):
         self.db = db_manager
     
+    # def get_delivery_progress(self, start_date: date = None, end_date: date = None) -> pd.DataFrame:
+    #     """
+    #     納入進度データ取得
+        
+    #     Args:
+    #         start_date: 開始日
+    #         end_date: 終了日
+        
+    #     Returns:
+    #         pd.DataFrame: 納入進度データ
+    #     """
+    #     session = self.db.get_session()
+        
+    #     try:
+    #         if start_date and end_date:
+    #             query = text("""
+    #                 SELECT 
+    #                     dp.id,
+    #                     dp.order_id,
+    #                     dp.product_id,
+    #                     p.product_code,
+    #                     p.product_name,
+    #                     p.used_container_id,
+    #                     p.used_truck_ids,
+    #                     p.capacity,
+    #                     p.can_advance,
+    #                     dp.order_date,
+    #                     dp.delivery_date,
+    #                     dp.order_quantity,
+    #                     dp.shipped_quantity,
+    #                     dp.remaining_quantity,
+    #                     dp.status,
+    #                     dp.customer_code,
+    #                     dp.customer_name,
+    #                     dp.delivery_location,
+    #                     dp.priority
+    #                 FROM delivery_progress dp
+    #                 LEFT JOIN products p ON dp.product_id = p.id
+    #                 WHERE dp.delivery_date BETWEEN :start_date AND :end_date
+    #                 AND dp.status != 'キャンセル'
+    #                 ORDER BY dp.delivery_date, dp.priority
+    #             """)
+    #             result = session.execute(query, {
+    #                 'start_date': start_date.strftime('%Y-%m-%d'),
+    #                 'end_date': end_date.strftime('%Y-%m-%d')
+    #             })
+    #         else:
+    #             query = text("""
+    #                 SELECT 
+    #                     dp.id,
+    #                     dp.order_id,
+    #                     dp.product_id,
+    #                     p.product_code,
+    #                     p.product_name,
+    #                     p.used_container_id,
+    #                     p.used_truck_ids,
+    #                     p.capacity,
+    #                     p.can_advance,
+    #                     dp.order_date,
+    #                     dp.delivery_date,
+    #                     dp.order_quantity,
+    #                     dp.shipped_quantity,
+    #                     dp.remaining_quantity,
+    #                     dp.status,
+    #                     dp.customer_code,
+    #                     dp.customer_name,
+    #                     dp.delivery_location,
+    #                     dp.priority
+    #                 FROM delivery_progress dp
+    #                 LEFT JOIN products p ON dp.product_id = p.id
+    #                 WHERE dp.status != 'キャンセル'
+    #                 ORDER BY dp.delivery_date, dp.priority
+    #             """)
+    #             result = session.execute(query)
+            
+    #         rows = result.fetchall()
+            
+    #         if rows:
+    #             columns = result.keys()
+    #             df = pd.DataFrame(rows, columns=columns)
+                
+    #             # 日付型に変換
+    #             if 'delivery_date' in df.columns:
+    #                 df['delivery_date'] = pd.to_datetime(df['delivery_date']).dt.date
+    #             if 'order_date' in df.columns:
+    #                 df['order_date'] = pd.to_datetime(df['order_date']).dt.date
+                
+    #             return df
+    #         else:
+    #             return pd.DataFrame()
+                
+    #     except SQLAlchemyError as e:
+    #         print(f"納入進度取得エラー: {e}")
+    #         return pd.DataFrame()
+    #     finally:
+    #         session.close()
+    
     def get_delivery_progress(self, start_date: date = None, end_date: date = None) -> pd.DataFrame:
         """
         納入進度データ取得
@@ -42,6 +139,7 @@ class DeliveryProgressRepository:
                         dp.order_date,
                         dp.delivery_date,
                         dp.order_quantity,
+                        dp.planned_quantity,        -- ✅ 追加
                         dp.shipped_quantity,
                         dp.remaining_quantity,
                         dp.status,
@@ -74,6 +172,7 @@ class DeliveryProgressRepository:
                         dp.order_date,
                         dp.delivery_date,
                         dp.order_quantity,
+                        dp.planned_quantity,        -- ✅ 追加
                         dp.shipped_quantity,
                         dp.remaining_quantity,
                         dp.status,
@@ -88,6 +187,7 @@ class DeliveryProgressRepository:
                 """)
                 result = session.execute(query)
             
+            # 以下は既存のまま
             rows = result.fetchall()
             
             if rows:
@@ -109,7 +209,6 @@ class DeliveryProgressRepository:
             return pd.DataFrame()
         finally:
             session.close()
-    
     def create_shipment_record(self, shipment_data: Dict[str, Any]) -> bool:
         """
         出荷実績を登録

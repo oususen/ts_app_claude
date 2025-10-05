@@ -4,7 +4,6 @@ from sqlalchemy import Column, Integer, String, Date, TIMESTAMP, text
 from sqlalchemy.orm import declarative_base
 import pandas as pd
 from typing import Optional
-
 from .database_manager import DatabaseManager
 
 Base = declarative_base()
@@ -216,8 +215,55 @@ class ProductRepository:
         finally:
             session.close()
 
+    # def create_product(self, product_data: dict) -> bool:
+    #     """製品を新規登録"""
+    #     session = self.db.get_session()
+    #     try:
+    #         product = ProductORM(
+    #             data_no=product_data.get("data_no"),
+    #             factory=product_data.get("factory"),
+    #             product_code=product_data.get("product_code"),
+    #             product_name=product_data.get("product_name"),
+    #             inspection_category=product_data.get("inspection_category", "A"),
+    #             capacity=product_data.get("capacity", 0),
+    #             lead_time=product_data.get("lead_time", 0),
+    #             fixed_point_days=product_data.get("fixed_point_days", 0),
+    #             container_width=product_data.get("container_width", 0),
+    #             container_depth=product_data.get("container_depth", 0),
+    #             container_height=product_data.get("container_height", 0),
+    #             stackable=int(product_data.get("stackable", False)),
+    #             used_container_id=product_data.get("used_container_id"),
+    #             used_truck_ids=product_data.get("used_truck_ids"),
+    #             can_advance=int(product_data.get("can_advance", False))
+    #         )
+    #         session.add(product)
+    #         session.commit()
+    #         return True
+    #     except SQLAlchemyError as e:
+    #         session.rollback()
+    #         print(f"製品登録エラー: {e}")
+    #         return False
+    #     finally:
+    #         session.close()
+    # バリデーション用の正しい値セット   
+# ⚠️ 適切な場所に定義してください（例：クラスの定数、またはモジュールレベルの定数）
+    
+
     def create_product(self, product_data: dict) -> bool:
         """製品を新規登録"""
+        VALID_CATEGORIES = {'F', 'N', 'NS', 'FS'}  # 例: 有効な検査区分のセット
+        
+        # 1. inspection_categoryの値を取得
+        # データに値がない場合は、これまで通りデフォルト値の 'A' を使用する
+        category = product_data.get("inspection_category")
+
+        # 2. 値がデフォルト 'A' でない場合、バリデーションを行う
+        # ⚠️ ここで「正しい値」のチェックを行います。
+        if category not in VALID_CATEGORIES:
+            # 警告メッセージを出力して、登録を中止（Falseを返す）
+            print(f"⚠️ 警告: 不正な inspection_category の値 '{category}' が指定されました。登録を中止します。")
+            return False
+        
         session = self.db.get_session()
         try:
             product = ProductORM(
@@ -225,7 +271,8 @@ class ProductRepository:
                 factory=product_data.get("factory"),
                 product_code=product_data.get("product_code"),
                 product_name=product_data.get("product_name"),
-                inspection_category=product_data.get("inspection_category", "A"),
+                # 3. バリデーション済みの 'category' 変数を使用
+                inspection_category=category,
                 capacity=product_data.get("capacity", 0),
                 lead_time=product_data.get("lead_time", 0),
                 fixed_point_days=product_data.get("fixed_point_days", 0),
@@ -246,6 +293,7 @@ class ProductRepository:
             return False
         finally:
             session.close()
+    
 
     def update_product(self, product_id: int, update_data: dict) -> bool:
         """製品を更新"""

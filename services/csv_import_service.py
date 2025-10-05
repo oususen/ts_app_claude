@@ -123,7 +123,18 @@ class CSVImportService:
             for _, row in df.iterrows():
                 unique_key = (int(row['データＮＯ']), row['品番'], row['検査区分'])
                 
-                # 既存チェック
+                # # 既存チェック DATA_NO + 品番 + 検査区分 の組み合わせで一意
+                # result = session.execute(text("""
+                #     SELECT id FROM products 
+                #     WHERE data_no = :data_no 
+                #     AND product_code = :product_code 
+                #     AND inspection_category = :inspection_category
+                # """), {
+                #     'data_no': unique_key[0],
+                #     'product_code': unique_key[1],
+                #     'inspection_category': unique_key[2]
+                # }).fetchone()
+                #
                 result = session.execute(text("""
                     SELECT id FROM products 
                     WHERE data_no = :data_no 

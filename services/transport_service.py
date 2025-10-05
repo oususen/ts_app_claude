@@ -13,6 +13,7 @@ import pandas as pd
 from datetime import datetime
 from io import BytesIO
 
+
 class TransportService:
     """運送関連ビジネスロジック（納入進度統合版）"""
     
@@ -20,8 +21,11 @@ class TransportService:
         self.transport_repo = TransportRepository(db_manager)
         self.production_repo = ProductionRepository(db_manager)
         self.product_repo = ProductRepository(db_manager)
+        
+        # ✅ 修正: db_managerを引数として渡す
         self.loading_plan_repo = LoadingPlanRepository(db_manager)
-        self.delivery_progress_repo = DeliveryProgressRepository(db_manager)  # 追加
+        self.delivery_progress_repo = DeliveryProgressRepository(db_manager)
+        
         self.planner = TransportPlanner()
         self.validator = LoadingValidator()
     
