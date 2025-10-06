@@ -2,7 +2,7 @@
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import text
 from typing import List, Dict, Any
-from datetime import date
+from datetime import date, datetime, time
 import pandas as pd
 from .database_manager import DatabaseManager
 
@@ -12,103 +12,6 @@ class DeliveryProgressRepository:
     
     def __init__(self, db_manager: DatabaseManager):
         self.db = db_manager
-    
-    # def get_delivery_progress(self, start_date: date = None, end_date: date = None) -> pd.DataFrame:
-    #     """
-    #     納入進度データ取得
-        
-    #     Args:
-    #         start_date: 開始日
-    #         end_date: 終了日
-        
-    #     Returns:
-    #         pd.DataFrame: 納入進度データ
-    #     """
-    #     session = self.db.get_session()
-        
-    #     try:
-    #         if start_date and end_date:
-    #             query = text("""
-    #                 SELECT 
-    #                     dp.id,
-    #                     dp.order_id,
-    #                     dp.product_id,
-    #                     p.product_code,
-    #                     p.product_name,
-    #                     p.used_container_id,
-    #                     p.used_truck_ids,
-    #                     p.capacity,
-    #                     p.can_advance,
-    #                     dp.order_date,
-    #                     dp.delivery_date,
-    #                     dp.order_quantity,
-    #                     dp.shipped_quantity,
-    #                     dp.remaining_quantity,
-    #                     dp.status,
-    #                     dp.customer_code,
-    #                     dp.customer_name,
-    #                     dp.delivery_location,
-    #                     dp.priority
-    #                 FROM delivery_progress dp
-    #                 LEFT JOIN products p ON dp.product_id = p.id
-    #                 WHERE dp.delivery_date BETWEEN :start_date AND :end_date
-    #                 AND dp.status != 'キャンセル'
-    #                 ORDER BY dp.delivery_date, dp.priority
-    #             """)
-    #             result = session.execute(query, {
-    #                 'start_date': start_date.strftime('%Y-%m-%d'),
-    #                 'end_date': end_date.strftime('%Y-%m-%d')
-    #             })
-    #         else:
-    #             query = text("""
-    #                 SELECT 
-    #                     dp.id,
-    #                     dp.order_id,
-    #                     dp.product_id,
-    #                     p.product_code,
-    #                     p.product_name,
-    #                     p.used_container_id,
-    #                     p.used_truck_ids,
-    #                     p.capacity,
-    #                     p.can_advance,
-    #                     dp.order_date,
-    #                     dp.delivery_date,
-    #                     dp.order_quantity,
-    #                     dp.shipped_quantity,
-    #                     dp.remaining_quantity,
-    #                     dp.status,
-    #                     dp.customer_code,
-    #                     dp.customer_name,
-    #                     dp.delivery_location,
-    #                     dp.priority
-    #                 FROM delivery_progress dp
-    #                 LEFT JOIN products p ON dp.product_id = p.id
-    #                 WHERE dp.status != 'キャンセル'
-    #                 ORDER BY dp.delivery_date, dp.priority
-    #             """)
-    #             result = session.execute(query)
-            
-    #         rows = result.fetchall()
-            
-    #         if rows:
-    #             columns = result.keys()
-    #             df = pd.DataFrame(rows, columns=columns)
-                
-    #             # 日付型に変換
-    #             if 'delivery_date' in df.columns:
-    #                 df['delivery_date'] = pd.to_datetime(df['delivery_date']).dt.date
-    #             if 'order_date' in df.columns:
-    #                 df['order_date'] = pd.to_datetime(df['order_date']).dt.date
-                
-    #             return df
-    #         else:
-    #             return pd.DataFrame()
-                
-    #     except SQLAlchemyError as e:
-    #         print(f"納入進度取得エラー: {e}")
-    #         return pd.DataFrame()
-    #     finally:
-    #         session.close()
     
     def get_delivery_progress(self, start_date: date = None, end_date: date = None) -> pd.DataFrame:
         """
@@ -139,7 +42,7 @@ class DeliveryProgressRepository:
                         dp.order_date,
                         dp.delivery_date,
                         dp.order_quantity,
-                        dp.planned_quantity,        -- ✅ 追加
+                        dp.planned_quantity,
                         dp.shipped_quantity,
                         dp.remaining_quantity,
                         dp.status,
@@ -172,7 +75,7 @@ class DeliveryProgressRepository:
                         dp.order_date,
                         dp.delivery_date,
                         dp.order_quantity,
-                        dp.planned_quantity,        -- ✅ 追加
+                        dp.planned_quantity,
                         dp.shipped_quantity,
                         dp.remaining_quantity,
                         dp.status,
@@ -187,7 +90,6 @@ class DeliveryProgressRepository:
                 """)
                 result = session.execute(query)
             
-            # 以下は既存のまま
             rows = result.fetchall()
             
             if rows:
@@ -209,6 +111,7 @@ class DeliveryProgressRepository:
             return pd.DataFrame()
         finally:
             session.close()
+    
     def create_shipment_record(self, shipment_data: Dict[str, Any]) -> bool:
         """
         出荷実績を登録
@@ -224,18 +127,54 @@ class DeliveryProgressRepository:
         try:
             query = text("""
                 INSERT INTO shipment_records
-                (progress_id, plan_id, truck_id, shipment_date, shipped_quantity, 
-                 container_id, num_containers, actual_departure_time, actual_arrival_time, 
-                 driver_name, notes)
+                (progress_id, truck_id, shipment_date, shipped_quantity, 
+                container_id, num_containers, actual_departure_time, actual_arrival_time, 
+                driver_name, notes)
                 VALUES 
-                (:progress_id, :plan_id, :truck_id, :shipment_date, :shipped_quantity,
-                 :container_id, :num_containers, :actual_departure_time, :actual_arrival_time,
-                 :driver_name, :notes)
+                (:progress_id, :truck_id, :shipment_date, :shipped_quantity,
+                :container_id, :num_containers, :actual_departure_time, :actual_arrival_time,
+                :driver_name, :notes)
             """)
             
-            session.execute(query, shipment_data)
+            # TIME型をDATETIME型に変換
+            departure_datetime = None
+            arrival_datetime = None
             
-            # 納入進度の出荷済み数量を更新
+            if shipment_data.get('actual_departure_time'):
+                if isinstance(shipment_data['actual_departure_time'], time):
+                    # date + timeをdatetimeに結合
+                    departure_datetime = datetime.combine(
+                        shipment_data['shipment_date'],
+                        shipment_data['actual_departure_time']
+                    )
+                else:
+                    departure_datetime = shipment_data['actual_departure_time']
+            
+            if shipment_data.get('actual_arrival_time'):
+                if isinstance(shipment_data['actual_arrival_time'], time):
+                    arrival_datetime = datetime.combine(
+                        shipment_data['shipment_date'],
+                        shipment_data['actual_arrival_time']
+                    )
+                else:
+                    arrival_datetime = shipment_data['actual_arrival_time']
+            
+            params = {
+                'progress_id': shipment_data['progress_id'],
+                'truck_id': shipment_data['truck_id'],
+                'shipment_date': shipment_data['shipment_date'],
+                'shipped_quantity': shipment_data['shipped_quantity'],
+                'container_id': shipment_data.get('container_id'),
+                'num_containers': shipment_data.get('num_containers'),
+                'actual_departure_time': departure_datetime,
+                'actual_arrival_time': arrival_datetime,
+                'driver_name': shipment_data.get('driver_name', ''),
+                'notes': shipment_data.get('notes', '')
+            }
+            
+            session.execute(query, params)
+            
+            # 納入進度の出荷済み数量を更新（remaining_quantityを除外）
             update_query = text("""
                 UPDATE delivery_progress 
                 SET shipped_quantity = shipped_quantity + :shipped_quantity,
@@ -258,6 +197,8 @@ class DeliveryProgressRepository:
         except SQLAlchemyError as e:
             session.rollback()
             print(f"出荷実績登録エラー: {e}")
+            import traceback
+            traceback.print_exc()
             return False
         finally:
             session.close()
@@ -267,7 +208,7 @@ class DeliveryProgressRepository:
         出荷実績を取得
         
         Args:
-            progress_id: 進度ID（指定した場合はその進度の実績のみ）
+            progress_id: 進度ID(指定した場合はその進度の実績のみ)
         
         Returns:
             pd.DataFrame: 出荷実績データ
@@ -370,7 +311,7 @@ class DeliveryProgressRepository:
             progress_data: 進度データ
         
         Returns:
-            int: 作成された進度ID（失敗時は0）
+            int: 作成された進度ID(失敗時は0)
         """
         session = self.db.get_session()
         
@@ -434,13 +375,14 @@ class DeliveryProgressRepository:
         session = self.db.get_session()
         
         try:
+            # delayedをdelayed_countに変更（予約語回避）
             query = text("""
                 SELECT 
                     COUNT(*) as total_orders,
                     SUM(CASE WHEN status = '未出荷' THEN 1 ELSE 0 END) as unshipped,
                     SUM(CASE WHEN status = '一部出荷' THEN 1 ELSE 0 END) as partial,
                     SUM(CASE WHEN status = '出荷完了' THEN 1 ELSE 0 END) as completed,
-                    SUM(CASE WHEN DATEDIFF(delivery_date, CURDATE()) < 0 AND status != '出荷完了' THEN 1 ELSE 0 END) as delayed,
+                    SUM(CASE WHEN DATEDIFF(delivery_date, CURDATE()) < 0 AND status != '出荷完了' THEN 1 ELSE 0 END) as delayed_count,
                     SUM(CASE WHEN DATEDIFF(delivery_date, CURDATE()) BETWEEN 0 AND 3 AND status != '出荷完了' THEN 1 ELSE 0 END) as urgent,
                     SUM(order_quantity) as total_quantity,
                     SUM(shipped_quantity) as total_shipped,

@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 from typing import Dict
 from ui.components.forms import FormComponents
 from ui.components.tables import TableComponents
+from services.transport_service import TransportService
 
 class TransportPage:
     """配送便計画ページ - トラック積載計画の作成画面"""
@@ -18,7 +19,12 @@ class TransportPage:
         st.title("🚚 配送便計画")
         st.write("オーダー情報から自動的にトラック積載計画を作成します。")
         
-        tab1, tab2, tab3, tab4 = st.tabs(["📦 積載計画作成", "📊 計画確認", "🧰 容器管理", "🚛 トラック管理"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "📦 積載計画作成",
+            "📊 計画確認", 
+            "🧰 容器管理", 
+            "🚛 トラック管理",
+            "🔬 検査対象製品"])
         
         with tab1:
             self._show_loading_planning()
@@ -28,7 +34,133 @@ class TransportPage:
             self._show_container_management()
         with tab4:
             self._show_truck_management()
-    
+        with tab5:
+            self._show_inspection_products()# ✅ 新しいメソッド
+    def _show_inspection_products(self):
+        """検査対象製品（F/$）の注文詳細表示"""
+        st.header("🔬 検査対象製品一覧")
+        st.write("検査区分が「F」または「$」を含む製品の注文詳細を表示します。")
+        
+        # 期間フィルター（3日前～2週間後）
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            start_date = st.date_input(
+                "開始日",
+                value=date.today() - timedelta(days=3),
+                key="inspection_start_date"
+            )
+        
+        with col2:
+            end_date = st.date_input(
+                "終了日",
+                value=date.today() + timedelta(days=14),
+                key="inspection_end_date"
+            )
+        
+        # データ取得
+        from sqlalchemy import text
+        
+        session = self.service.db.get_session()
+        
+        try:
+            query = text("""
+                SELECT 
+                    dp.delivery_date as 日付,
+                    dp.order_id as オーダーID,
+                    p.product_code as 製品コード,
+                    p.product_name as 製品名,
+                    dp.order_quantity as 受注数,
+                    dp.planned_quantity as 計画数,
+                    dp.shipped_quantity as 出荷済,
+                    p.inspection_category as 検査区分,
+                    dp.customer_name as 得意先,
+                    dp.status as ステータス
+                FROM delivery_progress dp
+                LEFT JOIN products p ON dp.product_id = p.id
+                WHERE dp.delivery_date BETWEEN :start_date AND :end_date
+                    AND (p.inspection_category LIKE 'F%' OR p.inspection_category LIKE '%$%')
+                    AND dp.status != 'キャンセル'
+                ORDER BY dp.delivery_date, p.product_code
+            """)
+            
+            result = session.execute(query, {
+                'start_date': start_date.strftime('%Y-%m-%d'),
+                'end_date': end_date.strftime('%Y-%m-%d')
+            })
+            
+            rows = result.fetchall()
+            
+            if rows:
+                df = pd.DataFrame(rows, columns=result.keys())
+                df['日付'] = pd.to_datetime(df['日付']).dt.date
+                
+                # サマリー
+                st.subheader("📊 サマリー")
+                col_sum1, col_sum2, col_sum3, col_sum4 = st.columns(4)
+                
+                with col_sum1:
+                    st.metric("総注文数", len(df))
+                # サマリー部分のみ修正
+                with col_sum2:
+                    # ✅ 修正: Fを含む
+                    f_count = len(df[df['検査区分'].str.contains('F', na=False)])
+                    st.metric("F含む（最終検査）", f_count)
+                with col_sum3:
+                    # ✅ 修正: $を含む（正規表現でエスケープ）
+                    s_count = len(df[df['検査区分'].str.contains('\\$', regex=True, na=False)])
+                    st.metric("$含む（目視検査）", s_count)
+                with col_sum4:
+                    st.metric("総受注数量", f"{df['受注数'].sum():,}個")
+                
+                # フィルター
+                inspection_filter = st.multiselect(
+                    "検査区分",
+                    options=['F', '$'],
+                    default={},  #['F', '$'],
+                    key="inspection_filter"
+                )
+                
+                if inspection_filter:
+                    df = df[df['検査区分'].isin(inspection_filter)]
+                
+                # データ表示
+                st.subheader("📋 注文詳細一覧")
+                st.dataframe(
+                    df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "日付": st.column_config.DateColumn("日付", format="YYYY-MM-DD"),
+                    }
+                )
+                
+                # 日付別集計
+                st.subheader("📅 日付別集計")
+                daily = df.groupby(['日付', '検査区分']).agg({
+                    'オーダーID': 'count',
+                    '受注数': 'sum'
+                }).reset_index()
+                daily.columns = ['日付', '検査区分', '注文件数', '合計数量']
+                
+                st.dataframe(daily, use_container_width=True, hide_index=True)
+                
+                # CSV出力
+                csv = df.to_csv(index=False).encode('utf-8-sig')
+                st.download_button(
+                    "📥 CSV ダウンロード",
+                    csv,
+                    f"検査対象製品_{start_date}_{end_date}.csv",
+                    "text/csv"
+                )
+            else:
+                st.info("指定期間内に検査対象製品（F/$）の注文がありません")
+        
+        except Exception as e:
+            st.error(f"データ取得エラー: {e}")
+        finally:
+            session.close()
+
     def _show_loading_planning(self):
         """積載計画作成"""
         st.header("📦 積載計画自動作成")

@@ -69,10 +69,9 @@ class DeliveryProgressPage:
             status_filter = st.multiselect(
                 "ステータス",
                 options=['未出荷', '計画済', '一部出荷', '出荷完了'],
-                default=['未出荷', '計画済', '一部出荷'],
+                default=['未出荷', '計画済', '一部出荷', '出荷完了'],
                 key="progress_status_filter"
-            )
-        
+            )      
         # 進度データ取得
         try:
             progress_df = self.service.get_delivery_progress(start_date, end_date)
@@ -272,20 +271,40 @@ class DeliveryProgressPage:
                                         else:
                                             st.warning("出荷可能な数量がありません")
                                             shipped_quantity = 0
-                                    
+                                    # delivery_progress_page.py の該当箇所を修正
                                     with col_s2:
                                         driver_name = st.text_input(
                                             "ドライバー名",
                                             key=f"driver_{progress_id}"
                                         )
                                         
+                                        # トラックのデフォルト時刻を取得
+                                        default_dep_time = None
+                                        default_arr_time = None
+                                        
+                                        if truck_id and not trucks_df.empty:
+                                            try:
+                                                truck_row = trucks_df[trucks_df['id'] == truck_id]
+                                                if not truck_row.empty:
+                                                    truck_info = truck_row.iloc[0]
+                                                    # departure_time と arrival_time カラムを使用
+                                                    if 'departure_time' in truck_info and pd.notna(truck_info['departure_time']):
+                                                        default_dep_time = truck_info['departure_time']
+                                                    if 'arrival_time' in truck_info and pd.notna(truck_info['arrival_time']):
+                                                        default_arr_time = truck_info['arrival_time']
+                                            except Exception as e:
+                                                print(f"トラック時刻取得エラー: {e}")
+                                        
+                                        # デフォルト値を設定(トラック設定時刻がなければNone)
                                         actual_departure = st.time_input(
                                             "実出発時刻",
+                                            value=default_dep_time,
                                             key=f"dep_time_{progress_id}"
                                         )
                                         
                                         actual_arrival = st.time_input(
                                             "実到着時刻",
+                                            value=default_arr_time,
                                             key=f"arr_time_{progress_id}"
                                         )
                                         
@@ -293,6 +312,8 @@ class DeliveryProgressPage:
                                             "備考",
                                             key=f"ship_notes_{progress_id}"
                                         )
+
+                                    # 出荷実績登録ボタン
                                     
                                     ship_submitted = st.form_submit_button("📦 出荷実績を登録", type="primary")
                                     
@@ -513,8 +534,9 @@ class DeliveryProgressPage:
                 if original_data.empty:
                     continue
                 
-                original_planned = int(original_data['planned_quantity'].iloc[0]) if 'planned_quantity' in original_data.columns else 0
-                original_shipped = int(original_data['shipped_quantity'].iloc[0])
+                # NaN対応
+                original_planned = int(original_data['planned_quantity'].iloc[0]) if pd.notna(original_data['planned_quantity'].iloc[0]) else 0
+                original_shipped = int(original_data['shipped_quantity'].iloc[0]) if pd.notna(original_data['shipped_quantity'].iloc[0]) else 0
                 
                 # 編集後のデータを取得
                 planned_rows = edited_df[
@@ -529,7 +551,6 @@ class DeliveryProgressPage:
                 
                 # 納入計画数の変更チェック
                 if not planned_rows.empty and date_str in planned_rows.columns:
-                    # 製品コードでフィルタ
                     product_planned_rows = planned_rows[
                         (planned_rows.index > edited_df[edited_df['製品コード'] == product_code].index.min()) &
                         (planned_rows.index < edited_df[edited_df['製品コード'] == product_code].index.min() + 4)
@@ -540,12 +561,13 @@ class DeliveryProgressPage:
                         
                         if new_planned != original_planned:
                             update_data = {'planned_quantity': new_planned}
-                            self.service.update_delivery_progress(order_id, update_data)
-                            changes_made = True
+                            success = self.service.update_delivery_progress(order_id, update_data)
+                            if success:
+                                changes_made = True
+                                print(f"✅ 計画数更新: order_id={order_id}, {original_planned} → {new_planned}")
                 
                 # 納入実績の変更チェック
                 if not shipped_rows.empty and date_str in shipped_rows.columns:
-                    # 製品コードでフィルタ
                     product_shipped_rows = shipped_rows[
                         (shipped_rows.index > edited_df[edited_df['製品コード'] == product_code].index.min()) &
                         (shipped_rows.index < edited_df[edited_df['製品コード'] == product_code].index.min() + 4)
@@ -554,24 +576,30 @@ class DeliveryProgressPage:
                     if not product_shipped_rows.empty:
                         new_shipped = int(product_shipped_rows.iloc[0][date_str]) if pd.notna(product_shipped_rows.iloc[0][date_str]) else 0
                         
-                        diff = new_shipped - original_shipped
-                        
-                        if diff != 0:
-                            # 出荷実績として登録
-                            shipment_data = {
-                                'progress_id': order_id,
-                                'truck_id': 1,  # デフォルトトラック
-                                'shipment_date': date_obj,
-                                'shipped_quantity': abs(diff),
-                                'driver_name': 'マトリックス入力',
-                                'actual_departure_time': None,
-                                'actual_arrival_time': None,
-                                'notes': 'マトリックスから直接入力'
-                            }
+                        # ✅ 修正: 直接 delivery_progress を更新
+                        if new_shipped != original_shipped:
+                            # 1. delivery_progress.shipped_quantity を直接更新
+                            update_data = {'shipped_quantity': new_shipped}
+                            success = self.service.update_delivery_progress(order_id, update_data)
                             
-                            if diff > 0:
-                                self.service.create_shipment_record(shipment_data)
+                            if success:
                                 changes_made = True
+                                print(f"✅ 実績更新: order_id={order_id}, {original_shipped} → {new_shipped}")
+                                
+                                # 2. 差分があれば出荷実績レコードも作成（履歴として）
+                                diff = new_shipped - original_shipped
+                                if diff > 0:
+                                    shipment_data = {
+                                        'progress_id': order_id,
+                                        'truck_id': 1,
+                                        'shipment_date': date_obj,
+                                        'shipped_quantity': diff,
+                                        'driver_name': 'マトリックス入力',
+                                        'actual_departure_time': None,
+                                        'actual_arrival_time': None,
+                                        'notes': f'マトリックスから直接入力（累計: {new_shipped}）'
+                                    }
+                                    self.service.create_shipment_record(shipment_data)
         
         return changes_made
 

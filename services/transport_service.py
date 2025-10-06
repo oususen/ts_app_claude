@@ -26,7 +26,8 @@ class TransportService:
         self.delivery_progress_repo = DeliveryProgressRepository(db_manager)
         
         self.planner = TransportPlanner()
-        self.validator = LoadingValidator()
+        
+        self.db = db_manager
     
     def get_containers(self):
         """容器一覧取得"""

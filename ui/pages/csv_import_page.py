@@ -1,7 +1,7 @@
 # app/ui/pages/csv_import_page.py
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime,date, timedelta
 from services.csv_import_service import CSVImportService
 
 class CSVImportPage:
@@ -106,6 +106,8 @@ class CSVImportPage:
                                     st.balloons()
                                     
                                     self._log_import_history(uploaded_file.name, message)
+                                    #検査対象製品を表示
+                                    self._show_inspection_products_after_import()
                                     
                                     st.info("💡 「配送便計画」ページでデータを確認してください")
                                 else:
@@ -121,6 +123,71 @@ class CSVImportPage:
             except Exception as e:
                 st.error(f"ファイル読み込みエラー: {e}")
                 st.info("ファイルがShift-JIS形式であることを確認してください")
+    def _show_inspection_products_after_import(self):
+        """インポート後に検査対象製品（F/$含む）を表示"""
+        from sqlalchemy import text
+        from datetime import date, timedelta
+        
+        session = self.import_service.db.get_session()
+        
+        try:
+            # 当日～2週間後
+            today = date.today() - timedelta(days=5)  # 過去5日分も確認
+            end_date = today + timedelta(days=14)
+            
+            query = text("""
+                SELECT 
+                    dp.delivery_date as 日付,
+                    dp.order_id as オーダーID,
+                    p.product_code as 製品コード,
+                    p.product_name as 製品名,
+                    dp.order_quantity as 受注数,
+                    p.inspection_category as 検査区分
+                FROM delivery_progress dp
+                LEFT JOIN products p ON dp.product_id = p.id
+                WHERE dp.delivery_date BETWEEN :start_date AND :end_date
+                    AND (p.inspection_category LIKE '%F%' OR p.inspection_category LIKE '%$%')
+                ORDER BY dp.delivery_date, p.product_code
+            """)
+            
+            result = session.execute(query, {
+                'start_date': today.strftime('%Y-%m-%d'),
+                'end_date': end_date.strftime('%Y-%m-%d')
+            })
+            
+            rows = result.fetchall()
+            
+            if rows:
+                st.warning("⚠️ 検査対象製品（F/$含む）が含まれています")
+                
+                df = pd.DataFrame(rows, columns=result.keys())
+                df['日付'] = pd.to_datetime(df['日付']).dt.date
+                
+                col_sum1, col_sum2, col_sum3 = st.columns(3)
+                with col_sum1:
+                    f_count = len(df[df['検査区分'].str.contains('F', na=False)])
+                    st.metric("F含む（最終検査）", f_count)
+                with col_sum2:
+                    s_count = len(df[df['検査区分'].str.contains('\\$', regex=True, na=False)])
+                    st.metric("$含む（目視検査）", s_count)
+                with col_sum3:
+                    st.metric("総数量", f"{df['受注数'].sum():,}個")
+                
+                st.dataframe(
+                    df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "日付": st.column_config.DateColumn("日付", format="YYYY-MM-DD"),
+                    }
+                )
+        
+        except Exception as e:
+            st.error(f"検査対象製品確認エラー: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+        finally:
+            session.close()        
     
     def _show_import_history(self):
         """インポート履歴表示"""
@@ -176,7 +243,7 @@ class CSVImportPage:
         ## ⚠️ 注意事項
         
         - ファイルは **Shift-JIS** エンコーディングである必要があります
-        - 上書きモードでは既存データが削除されます
+        - ⚠️上書きモードでは既存データが削除されます(使用禁止)
         - 大量データの場合は時間がかかることがあります
         
         ## 🔗 関連機能
