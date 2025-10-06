@@ -22,6 +22,8 @@ class Container(Base):
     max_volume = Column(Float, Computed("((width * depth * height) / 1000000000.0)", persisted=True))
     can_mix = Column(Boolean, default=True)
     created_at = Column(TIMESTAMP, nullable=True, server_default="CURRENT_TIMESTAMP")
+    stackable = Column(Boolean, default=False)
+    max_stack = Column(Integer, default=1)
 
     def __repr__(self):
         return f"<Container(id={self.id}, name='{self.name}', size={self.width}x{self.depth}x{self.height}, max_weight={self.max_weight}, max_volume={self.max_volume}, can_mix={self.can_mix})>"

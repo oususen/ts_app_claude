@@ -71,35 +71,6 @@ class ProductRepository:
     def __init__(self, db_manager: DatabaseManager):
         self.db = db_manager
 
-    # def get_all_products(self) -> pd.DataFrame:
-    #     """全製品取得"""
-    #     session = self.db.get_session()
-    #     try:
-    #         products = session.query(ProductORM).order_by(ProductORM.product_code).all()
-    #         return pd.DataFrame([{
-    #             "id": p.id,
-    #             "data_no": p.data_no,
-    #             "factory": p.factory,
-    #             "product_code": p.product_code,
-    #             "product_name": p.product_name,
-    #             "inspection_category": p.inspection_category or "",
-    #             "capacity": p.capacity or 0,
-    #             "lead_time": p.lead_time or 0,
-    #             "fixed_point_days": p.fixed_point_days or 0,
-    #             "container_width": p.container_width or 0,
-    #             "container_depth": p.container_depth or 0,
-    #             "container_height": p.container_height or 0,
-    #             "stackable": bool(p.stackable) if p.stackable is not None else False,
-    #             "used_container_id": p.used_container_id,
-    #             "used_truck_ids": p.used_truck_ids,
-    #             "can_advance": bool(p.can_advance) if hasattr(p, 'can_advance') and p.can_advance is not None else False
-    #         } for p in products if p is not None])
-    #     except SQLAlchemyError as e:
-    #         print(f"製品取得エラー: {e}")
-    #         return pd.DataFrame()
-    #     finally:
-    #         session.close()# app/repository/product_repository.py
-
     def get_all_products(self):
         """全製品を取得 - 安全な実装"""
         try:
@@ -119,7 +90,7 @@ class ProductRepository:
             if result.empty:
                 print("⚠️ 警告: 製品データが0件")
                 # テスト用のダミーデータを返す
-                return self._create_dummy_products()
+                #return self._create_dummy_products()
             
             return result
             
@@ -127,7 +98,8 @@ class ProductRepository:
             print(f"❌ 製品データ取得エラー: {e}")
             # エラー時もダミーデータを返す
             return self._create_dummy_products()
-
+    '''
+    ここから下はテスト用のダミーデータ作成メソッド
     def _create_dummy_products(self):
         """テスト用のダミー製品データを作成"""
         import pandas as pd
@@ -151,7 +123,8 @@ class ProductRepository:
         ]
         
         return pd.DataFrame(dummy_data)
-
+    ################################################################################
+    '''
     def get_product_constraints(self) -> pd.DataFrame:
         """製品制約取得"""
         session = self.db.get_session()
@@ -213,45 +186,11 @@ class ProductRepository:
             print(f"製品制約保存エラー: {e}")
             return False
         finally:
-            session.close()
-
-    # def create_product(self, product_data: dict) -> bool:
-    #     """製品を新規登録"""
-    #     session = self.db.get_session()
-    #     try:
-    #         product = ProductORM(
-    #             data_no=product_data.get("data_no"),
-    #             factory=product_data.get("factory"),
-    #             product_code=product_data.get("product_code"),
-    #             product_name=product_data.get("product_name"),
-    #             inspection_category=product_data.get("inspection_category", "A"),
-    #             capacity=product_data.get("capacity", 0),
-    #             lead_time=product_data.get("lead_time", 0),
-    #             fixed_point_days=product_data.get("fixed_point_days", 0),
-    #             container_width=product_data.get("container_width", 0),
-    #             container_depth=product_data.get("container_depth", 0),
-    #             container_height=product_data.get("container_height", 0),
-    #             stackable=int(product_data.get("stackable", False)),
-    #             used_container_id=product_data.get("used_container_id"),
-    #             used_truck_ids=product_data.get("used_truck_ids"),
-    #             can_advance=int(product_data.get("can_advance", False))
-    #         )
-    #         session.add(product)
-    #         session.commit()
-    #         return True
-    #     except SQLAlchemyError as e:
-    #         session.rollback()
-    #         print(f"製品登録エラー: {e}")
-    #         return False
-    #     finally:
-    #         session.close()
-    # バリデーション用の正しい値セット   
-# ⚠️ 適切な場所に定義してください（例：クラスの定数、またはモジュールレベルの定数）
-    
+            session.close()   
 
     def create_product(self, product_data: dict) -> bool:
         """製品を新規登録"""
-        VALID_CATEGORIES = {'F', 'N', 'NS', 'FS'}  # 例: 有効な検査区分のセット
+        VALID_CATEGORIES = {'F', 'N', 'NS', 'FS', '$S'}  # 例: 有効な検査区分のセット
         
         # 1. inspection_categoryの値を取得
         # データに値がない場合は、これまで通りデフォルト値の 'A' を使用する

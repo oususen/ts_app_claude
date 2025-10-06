@@ -9,7 +9,7 @@ class CSVImportService:
     def __init__(self, db_manager):
         self.db = db_manager
     
-    def import_csv_data(self, uploaded_file, update_mode: bool = False, 
+    def import_csv_data(self, uploaded_file, 
                        create_progress: bool = True) -> Tuple[bool, str]:
         """CSVファイルからデータを読み込み、データベースにインポート"""
         try:
@@ -29,25 +29,21 @@ class CSVImportService:
             if len(v3_rows) == 0:
                 return False, "V3行（数量データ）が見つかりませんでした"
             
-            # 上書きモードの場合は既存データを削除
-            if update_mode:
-                self._clear_existing_data()
-            
-            # 製品情報をインポート
+            # 製品情報をインポート（検査区分ごとに分けて登録）
             product_ids = self._import_basic_data(v3_rows)
             
             if not product_ids:
                 return False, "製品情報のインポートに失敗しました"
             
-            # 生産指示データを処理
+            # 生産指示データを処理（検査区分ごとに分けて登録）
             success, count = self._process_instruction_data(v2_rows, v3_rows, product_ids)
             
             if not success:
                 return False, "データインポートに失敗しました"
             
-            # 納入進度データも作成
+            # 納入進度データを作成（製品コードで統合）
             if create_progress:
-                progress_count = self._create_delivery_progress(v2_rows, v3_rows, product_ids)
+                progress_count = self._create_delivery_progress_consolidated(v2_rows, v3_rows, product_ids)
                 return True, f"{count}件の指示データと{progress_count}件の進度データを登録しました"
             else:
                 return True, f"{count}件の指示データを登録しました"
@@ -56,22 +52,8 @@ class CSVImportService:
             error_msg = f"CSVインポートエラー: {str(e)}"
             return False, error_msg
     
-    def _clear_existing_data(self):
-        """既存データをクリア"""
-        session = self.db.get_session()
-        try:
-            from sqlalchemy import text
-            session.execute(text("DELETE FROM production_instructions_detail"))
-            session.execute(text("DELETE FROM monthly_summary"))
-            session.commit()
-        except Exception as e:
-            session.rollback()
-            raise e
-        finally:
-            session.close()
-    
     def _import_basic_data(self, df: pd.DataFrame) -> Dict:
-        """製品基本情報をインポート"""
+        """製品基本情報をインポート（検査区分ごとに分けて登録）"""
         product_ids = {}
         session = self.db.get_session()
         
@@ -79,8 +61,10 @@ class CSVImportService:
             from sqlalchemy import text
             
             for _, row in df.iterrows():
+                # ✅ 検査区分も含めたユニークキー
                 unique_key = (int(row['データＮＯ']), row['品番'], row['検査区分'])
                 
+                # 既存チェック（検査区分も含む）
                 result = session.execute(text("""
                     SELECT id FROM products 
                     WHERE data_no = :data_no 
@@ -95,7 +79,7 @@ class CSVImportService:
                 if result:
                     product_id = result[0]
                 else:
-                    # 新規登録
+                    # 新規登録（検査区分ごとに別製品として登録）
                     sql = text("""
                         INSERT INTO products (
                             data_no, factory, client_code, calculation_date, production_complete_date,
@@ -146,6 +130,7 @@ class CSVImportService:
                     
                     product_id = result.lastrowid
                 
+                # ✅ 検査区分を含むキーで管理
                 product_ids[unique_key] = product_id
             
             session.commit()
@@ -160,7 +145,7 @@ class CSVImportService:
     def _process_instruction_data(self, v2_rows: pd.DataFrame, 
                                   v3_rows: pd.DataFrame, 
                                   product_ids: Dict) -> Tuple[bool, int]:
-        """生産指示データを処理"""
+        """生産指示データを処理（検査区分ごとに分けて登録）"""
         session = self.db.get_session()
         instruction_count = 0
         
@@ -168,13 +153,14 @@ class CSVImportService:
             from sqlalchemy import text
             
             for idx, v3_row in v3_rows.iterrows():
+                # ✅ 検査区分を含むユニークキー
                 unique_key = (int(v3_row['データＮＯ']), v3_row['品番'], v3_row['検査区分'])
                 product_id = product_ids.get(unique_key)
                 
                 if not product_id:
                     continue
                 
-                # V2行とマッチング（型を統一）
+                # V2行とマッチング
                 v2_match = v2_rows[
                     (v2_rows['データＮＯ'].astype(int) == int(v3_row['データＮＯ'])) & 
                     (v2_rows['品番'].astype(str) == str(v3_row['品番'])) & 
@@ -278,74 +264,118 @@ class CSVImportService:
         
         return instruction_count
     
-    def _create_delivery_progress(self, v2_rows, v3_rows, product_ids) -> int:
-        """納入進度データを作成（受注情報として登録）"""
+    def _create_delivery_progress_consolidated(self, v2_rows, v3_rows, product_ids) -> int:
+        """
+        納入進度データを作成（製品コード統合版）
+        ✅ 同じ製品コード×日付なら、検査区分が違っても数量を合計して1レコードにする
+        """
         session = self.db.get_session()
         progress_count = 0
         
         try:
             from sqlalchemy import text
             
-            # production_instructions_detail から日次データを取得
+            # ✅ ステップ1: 製品コードベースでデータを集約
+            consolidated_data = {}  # {(product_code, date): {'quantity': int, 'data_no': int, 'product_ids': [int]}}
+            
             for product_key, product_id in product_ids.items():
                 data_no, product_code, inspection_category = product_key
                 
-                # この製品の生産指示データを取得
+                # この製品（検査区分含む）の生産指示データを取得
                 instructions = session.execute(text("""
                     SELECT 
                         instruction_date,
-                        instruction_quantity,
-                        inspection_category
+                        instruction_quantity
                     FROM production_instructions_detail
                     WHERE product_id = :product_id
                     AND instruction_quantity > 0
                     ORDER BY instruction_date
                 """), {'product_id': product_id}).fetchall()
                 
-                if not instructions:
-                    continue
-                
-                # 各日付の指示を納入進度として登録
                 for instruction in instructions:
                     instruction_date = instruction[0]
                     quantity = instruction[1]
                     
-                    # オーダーIDを生成（例: ORD-20250801-001）
-                    order_id = f"ORD-{instruction_date.strftime('%Y%m%d')}-{product_id:03d}"
+                    # ✅ 製品コード×日付でグルーピング
+                    key = (product_code, instruction_date)
                     
-                    # 納入進度として登録（重複チェック）
-                    existing = session.execute(text("""
-                        SELECT id FROM delivery_progress
-                        WHERE order_id = :order_id
-                    """), {'order_id': order_id}).fetchone()
+                    if key not in consolidated_data:
+                        consolidated_data[key] = {
+                            'quantity': 0,
+                            'data_no': data_no,
+                            'product_ids': []
+                        }
                     
-                    if not existing:
-                        session.execute(text("""
-                            INSERT INTO delivery_progress
-                            (order_id, product_id, order_date, delivery_date, 
-                             order_quantity, shipped_quantity, status, 
-                             customer_code, customer_name, priority)
-                            VALUES
-                            (:order_id, :product_id, :order_date, :delivery_date,
-                             :order_quantity, 0, '未出荷',
-                             :customer_code, :customer_name, 5)
-                        """), {
-                            'order_id': order_id,
-                            'product_id': product_id,
-                            'order_date': instruction_date,
-                            'delivery_date': instruction_date,
-                            'order_quantity': quantity,
-                            'customer_code': f'C{data_no:03d}',
-                            'customer_name': f'取引先{data_no}'
-                        })
-                        
-                        progress_count += 1
+                    # ✅ 数量を合計
+                    consolidated_data[key]['quantity'] += quantity
+                    consolidated_data[key]['product_ids'].append(product_id)
+            
+            # ✅ ステップ2: 集約したデータをdelivery_progressに登録
+            for (product_code, instruction_date), data in consolidated_data.items():
+                # 代表product_idを取得（最初のもの）
+                representative_product_id = data['product_ids'][0]
+                total_quantity = data['quantity']
+                data_no = data['data_no']
+                
+                # オーダーIDを生成（製品コードベース）
+                order_id = f"ORD-{instruction_date.strftime('%Y%m%d')}-{product_code}"
+                
+                # ✅ 既存チェック（製品コード×日付でユニーク）
+                existing = session.execute(text("""
+                    SELECT id, order_quantity FROM delivery_progress
+                    WHERE order_id = :order_id
+                """), {'order_id': order_id}).fetchone()
+                
+                if existing:
+                    # ✅ 既存レコードがあれば数量を加算
+                    existing_id = existing[0]
+                    existing_quantity = existing[1]
+                    new_quantity = existing_quantity + total_quantity
+                    
+                    session.execute(text("""
+                        UPDATE delivery_progress
+                        SET order_quantity = :new_quantity,
+                            notes = CONCAT(IFNULL(notes, ''), ' [追加インポート: +', :add_quantity, '個]')
+                        WHERE id = :progress_id
+                    """), {
+                        'progress_id': existing_id,
+                        'new_quantity': new_quantity,
+                        'add_quantity': total_quantity
+                    })
+                    
+                    progress_count += 1
+                else:
+                    # ✅ 新規登録
+                    session.execute(text("""
+                        INSERT INTO delivery_progress
+                        (order_id, product_id, order_date, delivery_date, 
+                         order_quantity, shipped_quantity, status, 
+                         customer_code, customer_name, priority, notes)
+                        VALUES
+                        (:order_id, :product_id, :order_date, :delivery_date,
+                         :order_quantity, 0, '未出荷',
+                         :customer_code, :customer_name, 5, :notes)
+                    """), {
+                        'order_id': order_id,
+                        'product_id': representative_product_id,
+                        'order_date': instruction_date,
+                        'delivery_date': instruction_date,
+                        'order_quantity': total_quantity,
+                        'customer_code': f'C{data_no:03d}',
+                        'customer_name': f'取引先{data_no}',
+                        'notes': f'製品コード: {product_code} (検査区分統合済み)'
+                    })
+                    
+                    progress_count += 1
             
             session.commit()
             return progress_count
         
         except Exception as e:
             session.rollback()
+            print(f"納入進度作成エラー: {e}")
+            import traceback
+            traceback.print_exc()
             return 0
         finally:
             session.close()

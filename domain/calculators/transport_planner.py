@@ -5,7 +5,7 @@ from collections import defaultdict
 import pandas as pd
 
 class TransportPlanner:
-    """運送計画計算機 - 納期優先・集約優先版"""
+    """運送計画計算機 - 納期優先・集約優先版（納期遅れ防止対応）"""
     
     def calculate_loading_plan_from_orders(self,
                                           orders_df: pd.DataFrame,
@@ -17,15 +17,6 @@ class TransportPlanner:
                                           days: int = 7) -> Dict[str, Any]:
         """
         オーダーから積載計画を作成
-        
-        Args:
-            orders_df: 生産指示データ (delivery_date, product_id, order_quantity)
-            products_df: 製品マスタ (id, capacity, used_container_id, used_truck_ids, can_advance)
-            containers: 容器マスタ
-            trucks_df: トラックマスタ
-            truck_container_rules: トラック×容器ルール
-            start_date: 計画開始日
-            days: 計画日数
         """
         
         # 1. データ準備
@@ -54,7 +45,8 @@ class TransportPlanner:
                 daily_tasks[date_str],
                 container_map,
                 truck_map,
-                truck_container_rules
+                truck_container_rules,
+                target_date  # ✅ 積載日を渡す
             )
             
             daily_plans[date_str] = plan
@@ -95,7 +87,7 @@ class TransportPlanner:
         for _, order in orders_df.iterrows():
             product_id = int(order['product_id'])
             
-            # ✅ 修正: delivery_dateとorder_quantityを使用（両方に対応）
+            # 納期と数量を取得
             delivery_date = order.get('delivery_date') or order.get('instruction_date')
             quantity = int(order.get('order_quantity') or order.get('instruction_quantity', 0))
             
@@ -114,7 +106,7 @@ class TransportPlanner:
             if not container_id or pd.isna(container_id):
                 continue
             
-            # トラックIDリストを取得
+            # ✅ トラックIDリストを取得（納期に間に合うトラックのみ）
             if used_truck_ids and not pd.isna(used_truck_ids):
                 truck_ids = [int(tid.strip()) for tid in str(used_truck_ids).split(',')]
             else:
@@ -125,41 +117,58 @@ class TransportPlanner:
             if not truck_ids:
                 continue
             
-            # 容器数を計算（入り数で割り切れない場合は切り上げ）
+            # ✅ 納期に間に合うトラックのみフィルタリング
+            valid_truck_ids = []
+            for truck_id in truck_ids:
+                if truck_id in truck_map:
+                    truck = truck_map[truck_id]
+                    offset = int(truck.get('arrival_day_offset', 0))
+                    
+                    # 積載日 = 納期 - 到着日オフセット
+                    loading_date = delivery_date - timedelta(days=offset)
+                    
+                    # 納期チェック: 積載日 + オフセット <= 納期
+                    arrival_date = loading_date + timedelta(days=offset)
+                    
+                    if arrival_date <= delivery_date:
+                        valid_truck_ids.append((truck_id, loading_date, offset))
+            
+            if not valid_truck_ids:
+                print(f"⚠️ 警告: 製品 {product.get('product_code')} の納期 {delivery_date} に間に合うトラックがありません")
+                continue
+            
+            # ✅ 最も早く積載できるトラックを選択（当日着優先）
+            valid_truck_ids.sort(key=lambda x: (x[2], x[1]))  # オフセット小→積載日早い順
+            
+            best_truck_id, best_loading_date, best_offset = valid_truck_ids[0]
+            
+            # 容器数を計算
             num_containers = (quantity + capacity - 1) // capacity
             
-            # 最初のトラックの到着日オフセットを使用
-            first_truck_id = truck_ids[0]
-            if first_truck_id in truck_map:
-                truck = truck_map[first_truck_id]
-                offset = int(truck.get('arrival_day_offset', 0))
+            # 計画期間内のみ
+            if start_date <= best_loading_date < start_date + timedelta(days=days):
+                date_str = best_loading_date.strftime('%Y-%m-%d')
                 
-                # 積載日 = 納期 - 到着日オフセット
-                loading_date = delivery_date - timedelta(days=offset)
-                
-                # 計画期間内のみ
-                if start_date <= loading_date < start_date + timedelta(days=days):
-                    date_str = loading_date.strftime('%Y-%m-%d')
-                    
-                    daily_tasks[date_str].append({
-                        'product_id': product_id,
-                        'product_code': product.get('product_code', ''),
-                        'product_name': product.get('product_name', ''),
-                        'container_id': int(container_id),
-                        'truck_ids': truck_ids,
-                        'num_containers': num_containers,
-                        'total_quantity': quantity,
-                        'delivery_date': delivery_date,
-                        'can_advance': can_advance,
-                        'original_date': loading_date,
-                        'capacity': capacity
-                    })
+                daily_tasks[date_str].append({
+                    'product_id': product_id,
+                    'product_code': product.get('product_code', ''),
+                    'product_name': product.get('product_name', ''),
+                    'container_id': int(container_id),
+                    'truck_ids': [tid for tid, _, _ in valid_truck_ids],  # ✅ 有効なトラックIDのみ
+                    'num_containers': num_containers,
+                    'total_quantity': quantity,
+                    'delivery_date': delivery_date,
+                    'can_advance': can_advance,
+                    'original_date': best_loading_date,
+                    'capacity': capacity,
+                    'arrival_offset': best_offset  # ✅ 到着日オフセットを保存
+                })
         
         return dict(daily_tasks)
    
     def _plan_single_day(self, tasks, container_map, truck_map, 
-                        truck_container_rules) -> Tuple[Dict, List]:
-        """1日分の積載計画を作成 - 集約優先版（残容量考慮）"""
+                        truck_container_rules, loading_date: date) -> Tuple[Dict, List]:
+        """1日分の積載計画を作成 - 納期チェック強化版"""
         
         truck_plans = []
         remaining_tasks = []
@@ -188,13 +197,30 @@ class TransportPlanner:
             total_containers = sum(t['num_containers'] for t in task_list)
             remaining_containers = total_containers
             
-            # 使用可能なトラックIDを取得
+            # ✅ 使用可能なトラックIDを取得（納期チェック付き）
             available_truck_ids = set()
             for task in task_list:
                 if 'truck_ids' in task:
-                    available_truck_ids.update(task['truck_ids'])
-                elif 'truck_id' in task:
-                    available_truck_ids.add(task['truck_id'])
+                    for truck_id in task['truck_ids']:
+                        # 納期チェック
+                        if truck_id in truck_map:
+                            truck = truck_map[truck_id]
+                            offset = int(truck.get('arrival_day_offset', 0))
+                            arrival_date = loading_date + timedelta(days=offset)
+                            
+                            # ✅ 到着日 <= 納期 のみ許可
+                            if arrival_date <= delivery_date:
+                                available_truck_ids.add(truck_id)
+            
+            if not available_truck_ids:
+                # 納期に間に合うトラックがない
+                for task in task_list:
+                    remaining_tasks.append(task)
+                warnings.append(
+                    f"❌ 納期遅れ: {task_list[0]['product_code']} "
+                    f"(納期 {delivery_date.strftime('%m/%d')} に間に合うトラックがありません)"
+                )
+                continue
             
             # トラックを残容量の大きい順にソート
             sorted_trucks = self._sort_trucks_by_remaining_capacity(
@@ -282,7 +308,7 @@ class TransportPlanner:
 
     def _sort_trucks_by_remaining_capacity(self, truck_ids, truck_map, container_map, 
                                            container_id, truck_used_space):
-        """トラックを残容量の大きい順にソート + デフォルト便優先"""
+        """トラックを残容量の大きい順にソート + デフォルト便優先 + 当日着優先"""
         
         container = container_map.get(container_id)
         if not container:
@@ -312,12 +338,15 @@ class TransportPlanner:
             # デフォルト便フラグを取得
             is_default = truck.get('default_use', False)
             
-            truck_capacities.append((truck_id, remaining_capacity, is_default))
+            # ✅ 到着日オフセットを取得（当日着優先）
+            arrival_offset = int(truck.get('arrival_day_offset', 0))
+            
+            truck_capacities.append((truck_id, remaining_capacity, is_default, arrival_offset))
         
-        # ソート優先順位: デフォルト便優先 → 残容量大
-        truck_capacities.sort(key=lambda x: (-x[2], -x[1]))
+        # ✅ ソート優先順位: 当日着優先 → デフォルト便優先 → 残容量大
+        truck_capacities.sort(key=lambda x: (x[3], -x[2], -x[1]))
         
-        return [truck_id for truck_id, _, _ in truck_capacities]
+        return [truck_id for truck_id, _, _, _ in truck_capacities]
 
     def _find_or_create_truck_plan(self, truck_plans, truck_id, truck_info):
         """トラック計画を検索または新規作成"""
@@ -432,7 +461,8 @@ class TransportPlanner:
                     [task],
                     container_map,
                     truck_map,
-                    truck_container_rules
+                    truck_container_rules,
+                    new_date  # ✅ 積載日を渡す
                 )
                 
                 if plan['trucks']:

@@ -1,7 +1,7 @@
 # app/ui/pages/csv_import_page.py
 import streamlit as st
 import pandas as pd
-from datetime import datetime,date, timedelta
+from datetime import datetime, date, timedelta
 from services.csv_import_service import CSVImportService
 
 class CSVImportPage:
@@ -33,6 +33,11 @@ class CSVImportPage:
         - エンコーディング: Shift-JIS
         - レコード識別: V2（日付）、V3（数量）
         - 必須カラム: データＮＯ、品番、検査区分、スタート月度など
+        
+        **インポート仕様:**
+        - 既存データに追加されます
+        - 同じ製品コード×日付のデータは数量が合算されます
+        - 検査区分が違っても製品コードが同じなら納入進度では統合されます
         """)
         
         # ファイルアップロード
@@ -68,21 +73,18 @@ class CSVImportPage:
                 # インポートオプション
                 st.subheader("⚙️ インポートオプション")
                 
-                col_opt1, col_opt2 = st.columns(2)
+                create_progress = st.checkbox(
+                    "納入進度も同時作成",
+                    value=True,
+                    help="生産指示データから納入進度データも自動生成します（製品コードで統合）"
+                )
                 
-                with col_opt1:
-                    update_mode = st.radio(
-                        "更新モード",
-                        options=['追加', '上書き'],
-                        help="追加: 既存データに追加 / 上書き: 既存データを削除して新規登録"
-                    )
-                
-                with col_opt2:
-                    create_progress = st.checkbox(
-                        "納入進度も同時作成",
-                        value=True,
-                        help="生産指示データから納入進度データも自動生成します"
-                    )
+                st.info("""
+                **📌 インポート処理の詳細:**
+                - 製品マスタ: 検査区分ごとに別製品として登録
+                - 生産指示: 検査区分ごとに分けて登録
+                - 納入進度: 同じ製品コードなら検査区分が違っても統合（数量合計）
+                """)
                 
                 # インポート実行ボタン
                 st.markdown("---")
@@ -97,7 +99,6 @@ class CSVImportPage:
                                 
                                 success, message = self.import_service.import_csv_data(
                                     uploaded_file,
-                                    update_mode=(update_mode == '上書き'),
                                     create_progress=create_progress
                                 )
                                 
@@ -106,7 +107,8 @@ class CSVImportPage:
                                     st.balloons()
                                     
                                     self._log_import_history(uploaded_file.name, message)
-                                    #検査対象製品を表示
+                                    
+                                    # 検査対象製品を表示
                                     self._show_inspection_products_after_import()
                                     
                                     st.info("💡 「配送便計画」ページでデータを確認してください")
@@ -115,6 +117,8 @@ class CSVImportPage:
                             
                             except Exception as e:
                                 st.error(f"予期しないエラー: {e}")
+                                import traceback
+                                st.code(traceback.format_exc())
                 
                 with col_btn2:
                     if st.button("🗑️ キャンセル", use_container_width=True):
@@ -123,16 +127,16 @@ class CSVImportPage:
             except Exception as e:
                 st.error(f"ファイル読み込みエラー: {e}")
                 st.info("ファイルがShift-JIS形式であることを確認してください")
+    
     def _show_inspection_products_after_import(self):
         """インポート後に検査対象製品（F/$含む）を表示"""
         from sqlalchemy import text
-        from datetime import date, timedelta
         
         session = self.import_service.db.get_session()
         
         try:
             # 当日～2週間後
-            today = date.today() - timedelta(days=5)  # 過去5日分も確認
+            today = date.today() - timedelta(days=5)
             end_date = today + timedelta(days=14)
             
             query = text("""
@@ -168,7 +172,9 @@ class CSVImportPage:
                     f_count = len(df[df['検査区分'].str.contains('F', na=False)])
                     st.metric("F含む（最終検査）", f_count)
                 with col_sum2:
-                    s_count = len(df[df['検査区分'].str.contains('\\$', regex=True, na=False)])
+                    # $マークを含む検査区分をカウント
+                    dollar_pattern = r'\$'
+                    s_count = len(df[df['検査区分'].str.contains(dollar_pattern, regex=True, na=False)])
                     st.metric("$含む（目視検査）", s_count)
                 with col_sum3:
                     st.metric("総数量", f"{df['受注数'].sum():,}個")
@@ -187,7 +193,7 @@ class CSVImportPage:
             import traceback
             st.code(traceback.format_exc())
         finally:
-            session.close()        
+            session.close()
     
     def _show_import_history(self):
         """インポート履歴表示"""
@@ -204,7 +210,7 @@ class CSVImportPage:
                     use_container_width=True,
                     hide_index=True,
                     column_config={
-                        "import_date": st.column_config.DatetimeColumn(
+                        "インポート日時": st.column_config.DatetimeColumn(
                             "インポート日時",
                             format="YYYY-MM-DD HH:mm:ss"
                         ),
@@ -240,16 +246,33 @@ class CSVImportPage:
         3. インポートオプションを選択
         4. 「インポート実行」ボタンをクリック
         
+        ## 📊 データ処理の仕様
+        
+        ### 製品マスタ登録
+        - 検査区分ごとに**別製品**として登録されます
+        - 例: 同じ品番でも「N」と「F」は別レコード
+        
+        ### 生産指示データ
+        - 検査区分ごとに**分けて**登録されます
+        - `production_instructions_detail`テーブルに格納
+        
+        ### 納入進度データ
+        - 同じ製品コード×日付なら検査区分が違っても**統合**されます
+        - 数量は各検査区分の**合計値**となります
+        - 例: 品番「ABC123」の「N」100個 + 「F」50個 = 150個として1レコード登録
+        
         ## ⚠️ 注意事項
         
         - ファイルは **Shift-JIS** エンコーディングである必要があります
-        - ⚠️上書きモードでは既存データが削除されます(使用禁止)
+        - インポートは**追加モード**で実行されます（既存データは削除されません）
+        - 同じオーダーIDが既に存在する場合は数量が加算されます
         - 大量データの場合は時間がかかることがあります
         
         ## 🔗 関連機能
         
         - インポート後は「納入進度」ページで進捗を確認できます
         - 「配送便計画」で自動的に積載計画が作成されます
+        - 検査区分F/$を含む製品は自動的にハイライトされます
         """)
     
     def _log_import_history(self, filename: str, message: str):

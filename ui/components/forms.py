@@ -149,7 +149,7 @@ class FormComponents:
                 capacity = st.number_input("入り数 *", min_value=0, value=0, step=1)
                 inspection_category = st.selectbox(
                     "検査区分",
-                    options=['N', 'NS', 'FS', 'F', 'その他'],
+                    options=['N', 'NS', 'FS', 'F', "" '$S'],
                     index=0
                 )
                 lead_time = st.number_input("リードタイム (日)", min_value=0, value=0, step=1)
