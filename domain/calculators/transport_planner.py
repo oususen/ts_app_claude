@@ -4,8 +4,13 @@ from datetime import datetime, date, timedelta
 from collections import defaultdict
 import pandas as pd
 
+# transport_planner.py に追加する修正例
+
 class TransportPlanner:
-    """運送計画計算機 - 納期優先・集約優先版（納期遅れ防止対応）"""
+    """運送計画計算機 - カレンダー対応版"""
+    
+    def __init__(self, calendar_repo=None):
+        self.calendar_repo = calendar_repo
     
     def calculate_loading_plan_from_orders(self,
                                           orders_df: pd.DataFrame,
@@ -14,139 +19,146 @@ class TransportPlanner:
                                           trucks_df: pd.DataFrame,
                                           truck_container_rules: List[Any],
                                           start_date: date,
-                                          days: int = 7) -> Dict[str, Any]:
+                                          days: int = 7,
+                                          calendar_repo=None) -> Dict[str, Any]:
         """
-        オーダーから積載計画を作成
+        カレンダーを考慮した積載計画作成
         """
+        
+        self.calendar_repo = calendar_repo
+        
+        # ✅ 営業日のみで計画期間を構築
+        working_dates = []
+        current_date = start_date
+        
+        while len(working_dates) < days:
+            if not calendar_repo or calendar_repo.is_working_day(current_date):
+                working_dates.append(current_date)
+            current_date += timedelta(days=1)
         
         # 1. データ準備
         container_map = {c.id: c for c in containers}
         truck_map = {int(row['id']): row for _, row in trucks_df.iterrows()}
         
-        # 2. 日別オーダーをトラック積載タスクに変換
-        daily_tasks = self._create_daily_tasks(
-            orders_df, products_df, container_map, truck_map, start_date, days
+        # 2. 営業日ベースでタスク作成
+        daily_tasks = self._create_daily_tasks_with_calendar(
+            orders_df, products_df, container_map, truck_map, 
+            working_dates, calendar_repo
         )
         
-        # 3. 日別に積載計画を作成
+        # 残りは同じロジック...
         daily_plans = {}
         unloaded_tasks = []
         
-        for day in range(days):
-            target_date = start_date + timedelta(days=day)
-            date_str = target_date.strftime('%Y-%m-%d')
+        for working_date in working_dates:
+            date_str = working_date.strftime('%Y-%m-%d')
             
             if date_str not in daily_tasks:
                 daily_plans[date_str] = {'trucks': [], 'total_trips': 0, 'warnings': []}
                 continue
             
-            # その日のタスクを積載計画に変換
             plan, remaining = self._plan_single_day(
                 daily_tasks[date_str],
                 container_map,
                 truck_map,
                 truck_container_rules,
-                target_date  # ✅ 積載日を渡す
+                working_date
             )
             
             daily_plans[date_str] = plan
             
-            # 積載できなかったタスクを前倒し候補に
             if remaining:
-                unloaded_tasks.extend([(target_date, task) for task in remaining])
+                unloaded_tasks.extend([(working_date, task) for task in remaining])
         
-        # 4. 積載できなかったタスクを前倒し処理
+        # 前倒し処理も営業日を考慮
         if unloaded_tasks:
-            daily_plans, final_unloaded = self._reschedule_forward(
+            daily_plans, final_unloaded = self._reschedule_forward_with_calendar(
                 unloaded_tasks, daily_plans, products_df, container_map, 
-                truck_map, truck_container_rules, start_date
+                truck_map, truck_container_rules, working_dates[0], calendar_repo
             )
         else:
             final_unloaded = []
         
-        # 5. サマリー作成
         summary = self._create_summary(daily_plans, final_unloaded)
         
         return {
             'daily_plans': daily_plans,
             'summary': summary,
             'unloaded_tasks': final_unloaded,
-            'period': f"{start_date.strftime('%Y-%m-%d')} ~ {(start_date + timedelta(days=days-1)).strftime('%Y-%m-%d')}"
+            'period': f"{working_dates[0].strftime('%Y-%m-%d')} ~ {working_dates[-1].strftime('%Y-%m-%d')}",
+            'working_dates': [d.strftime('%Y-%m-%d') for d in working_dates]
         }
     
-    def _create_daily_tasks(self, orders_df, products_df, container_map, 
-                           truck_map, start_date, days) -> Dict[str, List[Dict]]:
-        """オーダーを日別タスクに変換"""
+    def _create_daily_tasks_with_calendar(self, orders_df, products_df, container_map, 
+                                         truck_map, working_dates, calendar_repo):
+        """営業日を考慮したタスク作成"""
         daily_tasks = defaultdict(list)
-        
-        # 製品情報をマップ化
         product_map = {int(row['id']): row for _, row in products_df.iterrows()}
-        
-        print(f"🔍 デバッグ: オーダーDF カラム = {orders_df.columns.tolist()}")
         
         for _, order in orders_df.iterrows():
             product_id = int(order['product_id'])
-            
-            # 納期と数量を取得
             delivery_date = order.get('delivery_date') or order.get('instruction_date')
             quantity = int(order.get('order_quantity') or order.get('instruction_quantity', 0))
             
-            if not delivery_date or quantity <= 0:
-                continue
-            
-            if product_id not in product_map:
+            if not delivery_date or quantity <= 0 or product_id not in product_map:
                 continue
             
             product = product_map[product_id]
             container_id = product.get('used_container_id')
             used_truck_ids = product.get('used_truck_ids')
-            capacity = product.get('capacity', 1)
-            can_advance = bool(product.get('can_advance', False))
             
             if not container_id or pd.isna(container_id):
                 continue
             
-            # ✅ トラックIDリストを取得（納期に間に合うトラックのみ）
+            # トラックIDリスト取得
             if used_truck_ids and not pd.isna(used_truck_ids):
                 truck_ids = [int(tid.strip()) for tid in str(used_truck_ids).split(',')]
             else:
-                # 使用トラック未指定の場合はデフォルト便を使用
                 truck_ids = [int(tid) for tid, truck in truck_map.items() 
                            if truck.get('default_use', False)]
             
             if not truck_ids:
                 continue
             
-            # ✅ 納期に間に合うトラックのみフィルタリング
+            # ✅ 納期に間に合う & 営業日のトラックを選定
             valid_truck_ids = []
             for truck_id in truck_ids:
                 if truck_id in truck_map:
                     truck = truck_map[truck_id]
                     offset = int(truck.get('arrival_day_offset', 0))
                     
-                    # 積載日 = 納期 - 到着日オフセット
+                    # 積載日 = 納期 - オフセット
                     loading_date = delivery_date - timedelta(days=offset)
                     
-                    # 納期チェック: 積載日 + オフセット <= 納期
+                    # ✅ 積載日が営業日かチェック
+                    if calendar_repo:
+                        # 最寄りの営業日を探す
+                        check_date = loading_date
+                        for _ in range(7):  # 最大7日前まで遡る
+                            if calendar_repo.is_working_day(check_date):
+                                loading_date = check_date
+                                break
+                            check_date -= timedelta(days=1)
+                    
+                    # 到着日チェック
                     arrival_date = loading_date + timedelta(days=offset)
                     
                     if arrival_date <= delivery_date:
                         valid_truck_ids.append((truck_id, loading_date, offset))
             
             if not valid_truck_ids:
-                print(f"⚠️ 警告: 製品 {product.get('product_code')} の納期 {delivery_date} に間に合うトラックがありません")
                 continue
             
-            # ✅ 最も早く積載できるトラックを選択（当日着優先）
-            valid_truck_ids.sort(key=lambda x: (x[2], x[1]))  # オフセット小→積載日早い順
-            
+            # 当日着優先でソート
+            valid_truck_ids.sort(key=lambda x: (x[2], x[1]))
             best_truck_id, best_loading_date, best_offset = valid_truck_ids[0]
             
-            # 容器数を計算
+            # 容器数計算
+            capacity = product.get('capacity', 1)
             num_containers = (quantity + capacity - 1) // capacity
             
-            # 計画期間内のみ
-            if start_date <= best_loading_date < start_date + timedelta(days=days):
+            # 営業日内のみ計画
+            if best_loading_date in working_dates:
                 date_str = best_loading_date.strftime('%Y-%m-%d')
                 
                 daily_tasks[date_str].append({
@@ -154,17 +166,77 @@ class TransportPlanner:
                     'product_code': product.get('product_code', ''),
                     'product_name': product.get('product_name', ''),
                     'container_id': int(container_id),
-                    'truck_ids': [tid for tid, _, _ in valid_truck_ids],  # ✅ 有効なトラックIDのみ
+                    'truck_ids': [tid for tid, _, _ in valid_truck_ids],
                     'num_containers': num_containers,
                     'total_quantity': quantity,
                     'delivery_date': delivery_date,
-                    'can_advance': can_advance,
+                    'can_advance': bool(product.get('can_advance', False)),
                     'original_date': best_loading_date,
                     'capacity': capacity,
-                    'arrival_offset': best_offset  # ✅ 到着日オフセットを保存
+                    'arrival_offset': best_offset
                 })
         
         return dict(daily_tasks)
+    
+    def _reschedule_forward_with_calendar(self, unloaded_tasks, daily_plans, products_df, 
+                                         container_map, truck_map, truck_container_rules, 
+                                         start_date, calendar_repo):
+        """営業日を考慮した前倒し処理"""
+        
+        product_map = {int(row['id']): row for _, row in products_df.iterrows()}
+        final_unloaded = []
+        
+        for original_date, task in unloaded_tasks:
+            product_id = task['product_id']
+            
+            if product_id in product_map:
+                can_advance = bool(product_map[product_id].get('can_advance', False))
+            else:
+                can_advance = False
+            
+            if not can_advance:
+                final_unloaded.append(task)
+                continue
+            
+            # ✅ 営業日のみで前倒し試行
+            rescheduled = False
+            for days_back in range(1, 8):
+                new_date = original_date - timedelta(days=days_back)
+                
+                if new_date < start_date:
+                    break
+                
+                # ✅ 営業日チェック
+                if calendar_repo and not calendar_repo.is_working_day(new_date):
+                    continue
+                
+                date_str = new_date.strftime('%Y-%m-%d')
+                
+                if date_str not in daily_plans:
+                    daily_plans[date_str] = {'trucks': [], 'total_trips': 0, 'warnings': []}
+                
+                plan, remaining = self._plan_single_day(
+                    [task],
+                    container_map,
+                    truck_map,
+                    truck_container_rules,
+                    new_date
+                )
+                
+                if plan['trucks']:
+                    daily_plans[date_str]['trucks'].extend(plan['trucks'])
+                    daily_plans[date_str]['total_trips'] += len(plan['trucks'])
+                    daily_plans[date_str]['warnings'].append(
+                        f"📅 前倒し（営業日調整）: {task['product_code']} "
+                        f"({original_date.strftime('%m/%d')} → {new_date.strftime('%m/%d')})"
+                    )
+                    rescheduled = True
+                    break
+            
+            if not rescheduled:
+                final_unloaded.append(task)
+        
+        return daily_plans, final_unloaded
    
     def _plan_single_day(self, tasks, container_map, truck_map, 
                         truck_container_rules, loading_date: date) -> Tuple[Dict, List]:

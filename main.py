@@ -12,6 +12,7 @@ from ui.pages.production_page import ProductionPage
 from ui.pages.transport_page import TransportPage
 from ui.pages.delivery_progress_page import DeliveryProgressPage
 from config import APP_CONFIG
+from ui.pages.calendar_page import CalendarPage
 
 class ProductionPlanningApp:
     """生産計画アプリケーション - メイン制御クラス"""
@@ -32,7 +33,8 @@ class ProductionPlanningApp:
             "制限設定": ConstraintsPage(self.production_service),
             "生産計画": ProductionPage(self.production_service),
             "配送便計画": TransportPage(self.transport_service),
-            "納入進度": DeliveryProgressPage(self.transport_service)
+            "納入進度": DeliveryProgressPage(self.transport_service),
+            "📅 会社カレンダー": CalendarPage(self.db),  # ✅ 追加
         }
     
     def run(self):

@@ -1,4 +1,4 @@
-# app/services/transport_service.py（納入進度統合版）
+# app/services/transport_service.py（カレンダー統合版）
 from typing import List, Dict, Any
 from datetime import date, timedelta
 from repository.transport_repository import TransportRepository
@@ -6,6 +6,7 @@ from repository.production_repository import ProductionRepository
 from repository.product_repository import ProductRepository
 from repository.loading_plan_repository import LoadingPlanRepository
 from repository.delivery_progress_repository import DeliveryProgressRepository
+from repository.calendar_repository import CalendarRepository  # ✅ 追加
 from domain.calculators.transport_planner import TransportPlanner
 from domain.validators.loading_validator import LoadingValidator
 from domain.models.transport import LoadingItem
@@ -15,18 +16,17 @@ from io import BytesIO
 
 
 class TransportService:
-    """運送関連ビジネスロジック（納入進度統合版）"""
+    """運送関連ビジネスロジック（カレンダー統合版）"""
     
     def __init__(self, db_manager):
         self.transport_repo = TransportRepository(db_manager)
         self.production_repo = ProductionRepository(db_manager)
         self.product_repo = ProductRepository(db_manager)
-        
         self.loading_plan_repo = LoadingPlanRepository(db_manager)
         self.delivery_progress_repo = DeliveryProgressRepository(db_manager)
+        self.calendar_repo = CalendarRepository(db_manager)  # ✅ 追加
         
         self.planner = TransportPlanner()
-        
         self.db = db_manager
     
     def get_containers(self):
@@ -66,9 +66,16 @@ class TransportService:
     def calculate_loading_plan_from_orders(self, 
                                           start_date: date, 
                                           days: int = 7,
-                                          use_delivery_progress: bool = True) -> Dict[str, Any]:
+                                          use_delivery_progress: bool = True,
+                                          use_calendar: bool = True) -> Dict[str, Any]:  # ✅ use_calendar追加
         """
-        オーダー情報から積載計画を自動作成
+        オーダー情報から積載計画を自動作成（カレンダー対応）
+        
+        Args:
+            start_date: 計画開始日
+            days: 計画日数
+            use_delivery_progress: 納入進度を使用するか
+            use_calendar: 会社カレンダーを使用するか（営業日のみで計画）
         """
         
         end_date = start_date + timedelta(days=days - 1)
@@ -112,6 +119,7 @@ class TransportService:
         trucks_df = self.get_trucks()
         truck_container_rules = self.transport_repo.get_truck_container_rules()
         
+        # ✅ カレンダーリポジトリを渡す
         result = self.planner.calculate_loading_plan_from_orders(
             orders_df=orders_df,
             products_df=products_df,
@@ -119,7 +127,8 @@ class TransportService:
             trucks_df=trucks_df,
             truck_container_rules=truck_container_rules,
             start_date=start_date,
-            days=days
+            days=days,
+            calendar_repo=self.calendar_repo if use_calendar else None  # ✅ カレンダー渡す
         )
         
         return result
@@ -170,9 +179,7 @@ class TransportService:
    
     def export_loading_plan_to_excel(self, plan_result: Dict[str, Any], 
                                      export_format: str = 'daily') -> BytesIO:
-        """
-        積載計画をExcelファイルとして出力
-        """
+        """積載計画をExcelファイルとして出力"""
         
         output = BytesIO()
         
@@ -275,9 +282,7 @@ class TransportService:
                 week_df.to_excel(writer, sheet_name=sheet_name, index=False)
     
     def export_loading_plan_to_csv(self, plan_result: Dict[str, Any]) -> str:
-        """
-        積載計画をCSV形式で出力
-        """
+        """積載計画をCSV形式で出力"""
         
         daily_data = []
         
