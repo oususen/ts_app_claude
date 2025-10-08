@@ -1,4 +1,5 @@
 # app/repository/product_repository.py
+
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import Column, Integer, String, Date, TIMESTAMP, text
 from sqlalchemy.orm import declarative_base
@@ -8,7 +9,6 @@ from .database_manager import DatabaseManager
 
 Base = declarative_base()
 
-# SQLAlchemy ORMモデル定義
 class ProductORM(Base):
     """製品テーブル - SQLAlchemy ORM"""
     __tablename__ = "products"
@@ -47,8 +47,8 @@ class ProductORM(Base):
     container_height = Column(Integer)
     stackable = Column(Integer)  # tinyint(1)
     used_container_id = Column(Integer)
-    used_truck_ids = Column(String(100))  # カンマ区切りのトラックID
-    can_advance = Column(Integer)  # tinyint(1) - 追加予定カラム
+    used_truck_ids = Column(String(100))  # ✅ 使用トラックID（カンマ区切り）
+    can_advance = Column(Integer)  # tinyint(1)
 
 
 class ProductionConstraintORM(Base):
@@ -58,9 +58,9 @@ class ProductionConstraintORM(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     product_id = Column(Integer, nullable=False, unique=True)
     daily_capacity = Column(Integer, nullable=False, default=1000)
-    smoothing_level = Column(Integer, nullable=False)  # decimal(5,2)
-    volume_per_unit = Column(Integer, nullable=False)  # decimal(10,2)
-    is_transport_constrained = Column(Integer, nullable=False, default=0)  # tinyint(1)
+    smoothing_level = Column(Integer, nullable=False)
+    volume_per_unit = Column(Integer, nullable=False)
+    is_transport_constrained = Column(Integer, nullable=False, default=0)
     created_at = Column(TIMESTAMP)
     updated_at = Column(TIMESTAMP)
 
@@ -72,7 +72,7 @@ class ProductRepository:
         self.db = db_manager
 
     def get_all_products(self):
-        """全製品を取得 - 安全な実装"""
+        """全製品を取得"""
         try:
             query = """
             SELECT 
@@ -89,47 +89,17 @@ class ProductRepository:
             
             if result.empty:
                 print("⚠️ 警告: 製品データが0件")
-                # テスト用のダミーデータを返す
-                #return self._create_dummy_products()
             
             return result
             
         except Exception as e:
             print(f"❌ 製品データ取得エラー: {e}")
-            # エラー時もダミーデータを返す
-            return self._create_dummy_products()
-    '''
-    ここから下はテスト用のダミーデータ作成メソッド
-    def _create_dummy_products(self):
-        """テスト用のダミー製品データを作成"""
-        import pandas as pd
-        
-        dummy_data = [
-            {
-                'id': 1, 'product_code': 'V053143521', 'product_name': 'ﾌﾞﾗｹﾂﾄ(ﾌｱﾝ)',
-                'used_container_id': 1, 'used_truck_ids': '1,2', 'capacity': 1, 
-                'inspection_category': 'N', 'can_advance': True
-            },
-            {
-                'id': 2, 'product_code': 'V053143615', 'product_name': 'ｽﾃ-(ﾗｼﾞｴ-ﾀ)',
-                'used_container_id': 1, 'used_truck_ids': '1,2', 'capacity': 1,
-                'inspection_category': 'N', 'can_advance': True
-            },
-            {
-                'id': 3, 'product_code': 'V053103705', 'product_name': 'ﾌﾚ-ﾑ,ｺﾝﾌﾟ(ﾌﾛﾝﾄ)',
-                'used_container_id': 2, 'used_truck_ids': '1', 'capacity': 1,
-                'inspection_category': 'NS', 'can_advance': False
-            }
-        ]
-        
-        return pd.DataFrame(dummy_data)
-    ################################################################################
-    '''
+            return pd.DataFrame()
+    
     def get_product_constraints(self) -> pd.DataFrame:
         """製品制約取得"""
         session = self.db.get_session()
         try:
-            # JOINクエリ
             query = """
                 SELECT 
                     pc.id,
@@ -190,16 +160,11 @@ class ProductRepository:
 
     def create_product(self, product_data: dict) -> bool:
         """製品を新規登録"""
-        VALID_CATEGORIES = {'F', 'N', 'NS', 'FS', '$S'}  # 例: 有効な検査区分のセット
+        VALID_CATEGORIES = {'F', 'N', 'NS', 'FS', '$S'}
         
-        # 1. inspection_categoryの値を取得
-        # データに値がない場合は、これまで通りデフォルト値の 'A' を使用する
         category = product_data.get("inspection_category")
 
-        # 2. 値がデフォルト 'A' でない場合、バリデーションを行う
-        # ⚠️ ここで「正しい値」のチェックを行います。
         if category not in VALID_CATEGORIES:
-            # 警告メッセージを出力して、登録を中止（Falseを返す）
             print(f"⚠️ 警告: 不正な inspection_category の値 '{category}' が指定されました。登録を中止します。")
             return False
         
@@ -210,7 +175,6 @@ class ProductRepository:
                 factory=product_data.get("factory"),
                 product_code=product_data.get("product_code"),
                 product_name=product_data.get("product_name"),
-                # 3. バリデーション済みの 'category' 変数を使用
                 inspection_category=category,
                 capacity=product_data.get("capacity", 0),
                 lead_time=product_data.get("lead_time", 0),
@@ -220,7 +184,7 @@ class ProductRepository:
                 container_height=product_data.get("container_height", 0),
                 stackable=int(product_data.get("stackable", False)),
                 used_container_id=product_data.get("used_container_id"),
-                used_truck_ids=product_data.get("used_truck_ids"),
+                used_truck_ids=product_data.get("used_truck_ids"),  # ✅ トラックID
                 can_advance=int(product_data.get("can_advance", False))
             )
             session.add(product)
@@ -233,25 +197,57 @@ class ProductRepository:
         finally:
             session.close()
     
-
     def update_product(self, product_id: int, update_data: dict) -> bool:
-        """製品を更新"""
+        """製品を更新 - デバッグログ付き完全版"""
         session = self.db.get_session()
         try:
+            # ✅ デバッグログ
+            print(f"\n🔍 === update_product 開始 ===")
+            print(f"  product_id: {product_id}")
+            print(f"  update_data: {update_data}")
+            
             product = session.get(ProductORM, product_id)
+            
             if product:
+                print(f"  ✅ 製品見つかりました: {product.product_code}")
+                
                 for key, value in update_data.items():
                     if hasattr(product, key):
                         # bool値をintに変換
                         if key in ['stackable', 'can_advance'] and isinstance(value, bool):
                             value = int(value)
+                        
+                        # ✅ 更新前の値を記録
+                        old_value = getattr(product, key, None)
+                        print(f"  📝 更新: {key}")
+                        print(f"     旧: {old_value}")
+                        print(f"     新: {value}")
+                        
                         setattr(product, key, value)
+                    else:
+                        print(f"  ⚠️ 警告: カラム '{key}' は ProductORM に存在しません")
+                
+                # ✅ コミット前の確認
+                print(f"  💾 コミット実行中...")
                 session.commit()
+                print(f"  ✅ コミット成功")
+                
+                # ✅ コミット後の値を確認
+                session.refresh(product)
+                print(f"  🔍 コミット後の used_truck_ids: {product.used_truck_ids}")
+                print(f"=== update_product 完了 ===\n")
+                
                 return True
-            return False
+            else:
+                print(f"  ❌ エラー: product_id={product_id} が見つかりません")
+                return False
+                
         except SQLAlchemyError as e:
             session.rollback()
-            print(f"製品更新エラー: {e}")
+            print(f"\n❌ === update_product エラー ===")
+            print(f"  エラー内容: {e}")
+            import traceback
+            traceback.print_exc()
             return False
         finally:
             session.close()

@@ -229,6 +229,10 @@ class TransportService:
             plan = plan_result['daily_plans'][date_str]
             
             for truck in plan.get('trucks', []):
+                truck_name = truck.get('truck_name', '不明なトラック')
+                truck_id = truck.get('truck_id', 0)
+            
+                print(f"🔍 デバッグ: {date_str} - truck_id={truck_id}, truck_name={truck_name}")
                 for item in truck.get('loaded_items', []):
                     daily_data.append({
                         '積載日': date_str,

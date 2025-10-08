@@ -4,7 +4,7 @@ import pandas as pd
 from ui.components.forms import FormComponents
 
 class ProductPage:
-    """製品管理ページ - 製品の登録・編集・削除"""
+    """製品管理ページ - マトリックス編集対応"""
     
     def __init__(self, production_service, transport_service):
         self.production_service = production_service
@@ -15,14 +15,345 @@ class ProductPage:
         st.title("📦 製品管理")
         st.write("製品の登録・編集・削除、および容器との紐付けを管理します。")
         
-        tab1, tab2, tab3 = st.tabs(["📦 製品一覧", "➕ 製品登録", "🔗 製品×容器紐付け"])
+        tab1, tab2, tab3 = st.tabs(["📊 製品一覧（マトリックス）", "➕ 製品登録", "🔗 製品×容器紐付け"])
         
         with tab1:
-            self._show_product_list()
+            self._show_product_matrix()
         with tab2:
             self._show_product_registration()
         with tab3:
             self._show_product_container_mapping()
+    
+    def _show_product_matrix(self):
+        """製品一覧 - マトリックス編集"""
+        st.header("📊 製品一覧（編集可能）")
+        
+        try:
+            products = self.production_service.get_all_products()
+            containers = self.transport_service.get_containers()
+            trucks_df = self.transport_service.get_trucks()
+            
+            if not products:
+                st.info("登録されている製品がありません")
+                return
+            
+            # 容器マップ作成
+            container_map = {c.id: c.name for c in containers} if containers else {}
+            container_name_to_id = {c.name: c.id for c in containers} if containers else {}
+            
+            # トラックマップ作成
+            truck_map = dict(zip(trucks_df['id'], trucks_df['name'])) if not trucks_df.empty else {}
+            truck_name_to_id = dict(zip(trucks_df['name'], trucks_df['id'])) if not trucks_df.empty else {}
+            
+            # DataFrame作成
+            products_df = pd.DataFrame([{
+                'ID': p.id,
+                '製品コード': p.product_code or '',
+                '製品名': p.product_name or '',
+                '使用容器': container_map.get(p.used_container_id, '未設定') if p.used_container_id else '未設定',
+                '入り数': int(p.capacity or 0),
+                '検査区分': p.inspection_category or 'N',
+                'リードタイム': int(p.lead_time or 0),
+                '固定日数': int(p.fixed_point_days or 0),
+                '前倒可': bool(getattr(p, 'can_advance', False)),
+                '使用トラック': ', '.join(self._get_truck_names_by_ids(getattr(p, 'used_truck_ids', None))) or '未設定'
+            } for p in products])
+            
+            # サマリー
+            st.subheader("📋 製品統計")
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("登録製品数", len(products_df))
+            with col2:
+                can_advance_count = len(products_df[products_df['前倒可'] == True])
+                st.metric("前倒可能製品", can_advance_count)
+            with col3:
+                n_count = len(products_df[products_df['検査区分'] == 'N'])
+                st.metric("検査区分N", n_count)
+            with col4:
+                avg_capacity = products_df['入り数'].mean() if len(products_df) > 0 else 0
+                st.metric("平均入り数", f"{avg_capacity:.0f}")
+            
+            st.markdown("---")
+            st.subheader("✏️ 製品情報編集（セルをダブルクリックで編集）")
+            
+            st.info("""
+            **編集方法:**
+            1. セルをダブルクリックして値を変更
+            2. 変更が完了したら「💾 変更を保存」をクリック
+            3. 削除する場合は「🗑️ 選択製品を削除」をクリック
+            """)
+            
+            # 編集可能なデータエディタ
+            edited_df = st.data_editor(
+                products_df,
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic",
+                disabled=['ID', '使用トラック'],  # ID・使用トラックは編集不可（個別編集で設定）
+                column_config={
+                    "ID": st.column_config.NumberColumn("ID", disabled=True),
+                    "製品コード": st.column_config.TextColumn("製品コード", width="medium", required=True),
+                    "製品名": st.column_config.TextColumn("製品名", width="medium", required=True),
+                    "使用容器": st.column_config.SelectboxColumn(
+                        "使用容器",
+                        options=['未設定'] + list(container_name_to_id.keys()),
+                        width="medium"
+                    ),
+                    "入り数": st.column_config.NumberColumn("入り数", min_value=0, step=1),
+                    "検査区分": st.column_config.SelectboxColumn(
+                        "検査区分",
+                        options=['N', 'NS', 'F', 'FS', '$S', ''],
+                        width="small"
+                    ),
+                    "リードタイム": st.column_config.NumberColumn("リードタイム(日)", min_value=0, step=1),
+                    "固定日数": st.column_config.NumberColumn("固定日数(日)", min_value=0, step=1),
+                    "前倒可": st.column_config.CheckboxColumn("前倒可"),
+                    "使用トラック": st.column_config.TextColumn("使用トラック", width="medium", disabled=True, help="個別編集で設定してください")
+                },
+                key="product_matrix_editor"
+            )
+            
+            # 保存・削除ボタン
+            st.markdown("---")
+            col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 4])
+            
+            with col_btn1:
+                if st.button("💾 変更を保存", type="primary", use_container_width=True):
+                    changes_saved = self._save_product_changes(
+                        original_df=products_df,
+                        edited_df=edited_df,
+                        container_name_to_id=container_name_to_id,
+                        truck_name_to_id=truck_name_to_id
+                    )
+                    
+                    if changes_saved:
+                        st.success("✅ 変更を保存しました")
+                        st.rerun()
+                    else:
+                        st.info("変更はありませんでした")
+            
+            with col_btn2:
+                if st.button("🗑️ 選択製品を削除", type="secondary", use_container_width=True):
+                    st.warning("削除機能は個別製品選択後に実行してください")
+            
+            # 詳細編集エリア（トラック選択対応）
+            st.markdown("---")
+            st.subheader("🔍 個別製品の詳細編集・削除（トラック選択可）")
+            
+            st.info("💡 **使用トラックの設定**は、こちらの個別編集で行ってください（複数選択可能）")
+            
+            product_options = {f"{row['製品コード']} - {row['製品名']}": row['ID'] for _, row in products_df.iterrows()}
+            selected_product_key = st.selectbox(
+                "編集・削除する製品を選択",
+                options=list(product_options.keys()),
+                key="product_detail_selector"
+            )
+            
+            if selected_product_key:
+                product_id = product_options[selected_product_key]
+                product = next((p for p in products if p.id == product_id), None)
+                
+                if product:
+                    self._show_product_detail_editor_with_truck_select(product, containers, trucks_df, container_map)
+        
+        except Exception as e:
+            st.error(f"製品一覧エラー: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+    
+    def _save_product_changes(self, original_df, edited_df, container_name_to_id, truck_name_to_id):
+        """マトリックスの変更をデータベースに保存"""
+        
+        changes_made = False
+        
+        for idx, edited_row in edited_df.iterrows():
+            if idx >= len(original_df):
+                # 新規行の場合（スキップまたは新規登録処理）
+                continue
+            
+            original_row = original_df.iloc[idx]
+            product_id = int(edited_row['ID'])
+            
+            # 変更があったか確認
+            update_data = {}
+            
+            # 製品コード
+            if edited_row['製品コード'] != original_row['製品コード']:
+                update_data['product_code'] = edited_row['製品コード']
+            
+            # 製品名
+            if edited_row['製品名'] != original_row['製品名']:
+                update_data['product_name'] = edited_row['製品名']
+            
+            # 使用容器
+            new_container_name = edited_row['使用容器']
+            original_container_name = original_row['使用容器']
+            if new_container_name != original_container_name:
+                if new_container_name == '未設定':
+                    update_data['used_container_id'] = None
+                else:
+                    update_data['used_container_id'] = container_name_to_id.get(new_container_name)
+            
+            # 入り数
+            if int(edited_row['入り数']) != int(original_row['入り数']):
+                update_data['capacity'] = int(edited_row['入り数'])
+            
+            # 検査区分
+            if edited_row['検査区分'] != original_row['検査区分']:
+                update_data['inspection_category'] = edited_row['検査区分']
+            
+            # リードタイム
+            if int(edited_row['リードタイム']) != int(original_row['リードタイム']):
+                update_data['lead_time'] = int(edited_row['リードタイム'])
+            
+            # 固定日数
+            if int(edited_row['固定日数']) != int(original_row['固定日数']):
+                update_data['fixed_point_days'] = int(edited_row['固定日数'])
+            
+            # 前倒可
+            if bool(edited_row['前倒可']) != bool(original_row['前倒可']):
+                update_data['can_advance'] = bool(edited_row['前倒可'])
+            
+            # 使用トラック
+            if edited_row['使用トラック'] != original_row['使用トラック']:
+                truck_names = [name.strip() for name in edited_row['使用トラック'].split(',') if name.strip() and name.strip() != '未設定']
+                if truck_names:
+                    truck_ids = [truck_name_to_id.get(name) for name in truck_names if name in truck_name_to_id]
+                    update_data['used_truck_ids'] = ','.join(map(str, truck_ids)) if truck_ids else None
+                else:
+                    update_data['used_truck_ids'] = None
+            
+            # 変更があれば保存
+            if update_data:
+                success = self.production_service.update_product(product_id, update_data)
+                if success:
+                    changes_made = True
+                    print(f"✅ 製品ID={product_id} を更新しました")
+                else:
+                    print(f"❌ 製品ID={product_id} の更新に失敗")
+        
+        return changes_made
+    
+    def _show_product_detail_editor_with_truck_select(self, product, containers, trucks_df, container_map):
+        """個別製品の詳細編集・削除（トラック複数選択対応）"""
+        
+        with st.container(border=True):
+            st.write(f"**製品詳細編集: {product.product_code}**")
+            
+            # 現在の情報表示
+            col_info1, col_info2, col_info3 = st.columns(3)
+            
+            with col_info1:
+                st.write("**基本情報**")
+                st.write(f"ID: {product.id}")
+                st.write(f"製品コード: {product.product_code or '-'}")
+                st.write(f"製品名: {product.product_name or '-'}")
+                st.write(f"入り数: {product.capacity or 0}")
+            
+            with col_info2:
+                st.write("**容器情報**")
+                st.write(f"使用容器: {container_map.get(product.used_container_id, '未設定') if product.used_container_id else '未設定'}")
+                st.write(f"検査区分: {product.inspection_category or 'N'}")
+            
+            with col_info3:
+                st.write("**納期・制約**")
+                st.write(f"リードタイム: {product.lead_time or 0} 日")
+                st.write(f"固定日数: {product.fixed_point_days or 0} 日")
+                st.write(f"前倒可: {'✅' if getattr(product, 'can_advance', False) else '❌'}")
+            
+            st.markdown("---")
+            
+            # トラック複数選択編集フォーム
+            with st.form(f"edit_truck_form_{product.id}"):
+                st.write("**🚛 使用トラック設定（優先順位付き）**")
+                
+                # 使用トラック選択（複数選択）
+                if not trucks_df.empty:
+                    truck_options = dict(zip(trucks_df['name'], trucks_df['id']))
+                    current_truck_ids = []
+                    if hasattr(product, 'used_truck_ids') and product.used_truck_ids:
+                        try:
+                            current_truck_ids = [int(tid.strip()) for tid in str(product.used_truck_ids).split(',')]
+                        except:
+                            current_truck_ids = []
+                    
+                    # 現在選択中のトラック名を取得
+                    truck_name_map = dict(zip(trucks_df['id'], trucks_df['name']))
+                    current_truck_names = [truck_name_map.get(tid) for tid in current_truck_ids if tid in truck_name_map]
+                    
+                    st.info("💡 **優先順位**: 上から順に優先度が高くなります（ドラッグ&ドロップで並び替え可能）")
+                    
+                    new_used_trucks = st.multiselect(
+                        "使用トラック（複数選択可・上から優先）",
+                        options=list(truck_options.keys()),
+                        default=current_truck_names,
+                        key=f"trucks_{product.id}",
+                        help="上にあるトラックほど優先的に使用されます"
+                    )
+                    
+                    # 優先順位の説明
+                    if new_used_trucks:
+                        st.success(f"**設定される優先順位:** 1位: {new_used_trucks[0]}" + 
+                                 (f" → 2位: {new_used_trucks[1]}" if len(new_used_trucks) > 1 else "") +
+                                 (f" → 3位: {new_used_trucks[2]}" if len(new_used_trucks) > 2 else ""))
+                else:
+                    new_used_trucks = []
+                    st.info("トラックが登録されていません")
+                
+                # 現在の設定を表示
+                if current_truck_names:
+                    st.info(f"現在の設定（優先順）: {' → '.join(current_truck_names)}")
+                else:
+                    st.warning("トラックが未設定です")
+                
+                submitted = st.form_submit_button("💾 トラック設定を保存", type="primary")
+                
+                if submitted:
+                    # ✅ 選択された順番でトラックIDを保存（優先順位）
+                    selected_truck_ids = [truck_options[name] for name in new_used_trucks] if new_used_trucks else []
+                    used_truck_ids_str = ','.join(map(str, selected_truck_ids)) if selected_truck_ids else None
+                    
+                    update_data = {
+                        "used_truck_ids": used_truck_ids_str
+                    }
+                    
+                    success = self.production_service.update_product(product.id, update_data)
+                    if success:
+                        st.success(f"✅ 製品 '{product.product_code}' のトラック設定を更新しました")
+                        st.balloons()
+                        st.rerun()
+                    else:
+                        st.error("❌ トラック設定の更新に失敗しました")
+            
+            # 削除ボタン
+            st.markdown("---")
+            col_del1, col_del2 = st.columns([1, 5])
+            
+            with col_del1:
+                if st.button("🗑️ この製品を削除", key=f"delete_product_{product.id}", type="secondary", use_container_width=True):
+                    if st.session_state.get(f"confirm_delete_{product.id}", False):
+                        success = self.production_service.delete_product(product.id)
+                        if success:
+                            st.success(f"製品 '{product.product_code}' を削除しました")
+                            # 確認フラグをリセット
+                            st.session_state[f"confirm_delete_{product.id}"] = False
+                            st.rerun()
+                        else:
+                            st.error("製品削除に失敗しました")
+                    else:
+                        st.session_state[f"confirm_delete_{product.id}"] = True
+                        st.warning("⚠️ もう一度クリックすると削除されます")
+            
+            with col_del2:
+                if st.session_state.get(f"confirm_delete_{product.id}", False):
+                    st.error("⚠️ 削除確認中 - もう一度「削除」ボタンをクリックしてください")
+    
+    def _show_product_detail_editor(self, product, containers, trucks_df, container_map):
+        """個別製品の詳細編集・削除（旧版・互換性用）"""
+        # 新版を呼び出す
+        self._show_product_detail_editor_with_truck_select(product, containers, trucks_df, container_map)
     
     def _get_truck_names_by_ids(self, truck_ids_str):
         """トラックIDの文字列からトラック名のリストを取得"""
@@ -37,234 +368,6 @@ class ProductPage:
             return [truck_map.get(tid, f"ID:{tid}") for tid in truck_ids]
         except:
             return []
-    
-    def _show_product_list(self):
-        """製品一覧・編集"""
-        st.header("📦 製品一覧")
-        
-        try:
-            products = self.production_service.get_all_products()
-            containers = self.transport_service.get_containers()
-            trucks_df = self.transport_service.get_trucks()
-            
-            if not products:
-                st.info("登録されている製品がありません")
-                return
-            
-            # 容器マップ作成
-            container_map = {c.id: c.name for c in containers} if containers else {}
-            
-            # 一覧テーブル表示
-            st.subheader("登録製品一覧")
-            products_df = pd.DataFrame([{
-                'ID': p.id,
-                '製品コード': p.product_code or '-',
-                '製品名': p.product_name or '-',
-                '使用容器': container_map.get(p.used_container_id, '-') if p.used_container_id else '-',
-                '入り数': p.capacity or 0,
-                '検査区分': p.inspection_category or '-',
-                'リードタイム': f"{p.lead_time}日" if p.lead_time else '-',
-                '前倒可': '✅' if getattr(p, 'can_advance', False) else '❌',
-                '使用トラック': ', '.join(self._get_truck_names_by_ids(getattr(p, 'used_truck_ids', None))) or '-'
-            } for p in products])
-            
-            st.dataframe(
-                products_df, 
-                use_container_width=True, 
-                hide_index=True,
-                on_select="rerun",
-                selection_mode="single-row"
-            )
-            
-            # 製品選択UI
-            st.subheader("📝 製品詳細編集")
-            
-            # 製品選択ドロップダウン
-            product_options = {f"{p.product_code} - {p.product_name}": p for p in products}
-            selected_product_key = st.selectbox(
-                "編集する製品を選択",
-                options=list(product_options.keys()),
-                key="product_selector"
-            )
-            
-            if selected_product_key:
-                product = product_options[selected_product_key]
-                
-                # 詳細編集エリア
-                with st.container(border=True):
-                    st.subheader(f"🔧 製品編集: {product.product_code}")
-                    
-                    # 製品情報表示
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                        st.write("**基本情報**")
-                        st.write(f"ID: {product.id}")
-                        st.write(f"製品コード: {product.product_code or '-'}")
-                        st.write(f"製品名: {product.product_name or '-'}")
-                        st.write(f"入り数: {product.capacity or 0}")
-                        st.write(f"検査区分: {product.inspection_category or '-'}")
-                    
-                    with col2:
-                        st.write("**容器・トラック情報**")
-                        st.write(f"使用容器: {container_map.get(product.used_container_id, '-') if product.used_container_id else '-'}")
-                        truck_names = self._get_truck_names_by_ids(getattr(product, 'used_truck_ids', None))
-                        st.write(f"使用トラック: {', '.join(truck_names) if truck_names else '-'}")
-                    
-                    with col3:
-                        st.write("**納期・制約**")
-                        st.write(f"リードタイム: {product.lead_time or 0} 日")
-                        st.write(f"固定日数: {product.fixed_point_days or 0} 日")
-                        st.write(f"前倒可: {'✅' if getattr(product, 'can_advance', False) else '❌'}")
-                    
-                    # 更新フォーム
-                    with st.form(f"edit_product_form_{product.id}"):
-                        st.write("**製品情報を編集**")
-                        
-                        col_a, col_b = st.columns(2)
-                        
-                        with col_a:
-                            st.write("**基本情報**")
-                            new_product_code = st.text_input(
-                                "製品コード", 
-                                value=product.product_code or '',
-                                key=f"code_{product.id}"
-                            )
-                            new_product_name = st.text_input(
-                                "製品名", 
-                                value=product.product_name or '',
-                                key=f"name_{product.id}"
-                            )
-                            new_capacity = st.number_input(
-                                "入り数", 
-                                min_value=0, 
-                                value=int(product.capacity or 0),
-                                key=f"capacity_{product.id}"
-                            )
-                            new_inspection_category = st.selectbox(
-                                "検査区分",
-                                options=['N', 'F', 'NS', 'FS', 'その他'],
-                                index=['N', 'F', 'NS', 'FS', 'その他'].index(product.inspection_category) if product.inspection_category in ['N', 'F', 'NS', 'FS', 'その他'] else 0,
-                                key=f"inspection_{product.id}"
-                            )
-                            
-                            new_lead_time = st.number_input(
-                                "リードタイム (日)", 
-                                min_value=0, 
-                                value=int(product.lead_time or 0),
-                                key=f"lead_{product.id}"
-                            )
-                            new_fixed_point_days = st.number_input(
-                                "固定日数 (日)", 
-                                min_value=0, 
-                                value=int(product.fixed_point_days or 0),
-                                key=f"fixed_{product.id}"
-                            )
-                        
-                        with col_b:
-                            st.write("**容器・トラック設定**")
-                            
-                            # 使用容器選択
-                            container_options = {c.name: c.id for c in containers} if containers else {}
-                            current_container_name = container_map.get(product.used_container_id, None)
-                            
-                            new_used_container = st.selectbox(
-                                "使用容器",
-                                options=['未設定'] + list(container_options.keys()),
-                                index=0 if not current_container_name else list(container_options.keys()).index(current_container_name) + 1 if current_container_name in container_options else 0,
-                                key=f"container_{product.id}"
-                            )
-                            
-                            # 使用トラック選択（複数選択）
-                            if not trucks_df.empty:
-                                truck_options = dict(zip(trucks_df['name'], trucks_df['id']))
-                                current_truck_ids = []
-                                if hasattr(product, 'used_truck_ids') and product.used_truck_ids:
-                                    try:
-                                        current_truck_ids = [int(tid.strip()) for tid in str(product.used_truck_ids).split(',')]
-                                    except:
-                                        current_truck_ids = []
-                                
-                                # 現在選択中のトラック名を取得
-                                truck_name_map = dict(zip(trucks_df['id'], trucks_df['name']))
-                                current_truck_names = [truck_name_map.get(tid) for tid in current_truck_ids if tid in truck_name_map.values()]
-                                
-                                new_used_trucks = st.multiselect(
-                                    "使用トラック（複数選択可）",
-                                    options=list(truck_options.keys()),
-                                    default=current_truck_names,
-                                    key=f"trucks_{product.id}"
-                                )
-                            else:
-                                new_used_trucks = []
-                                st.info("トラックが登録されていません")
-                            
-                            new_can_advance = st.checkbox(
-                                "前倒可 (平準化対象)", 
-                                value=bool(getattr(product, 'can_advance', False)),
-                                key=f"advance_{product.id}"
-                            )
-                        
-                        submitted = st.form_submit_button("💾 更新", type="primary")
-                        
-                        if submitted:
-                            # 選択されたトラックIDを取得
-                            selected_truck_ids = [truck_options[name] for name in new_used_trucks] if new_used_trucks else []
-                            used_truck_ids_str = ','.join(map(str, selected_truck_ids)) if selected_truck_ids else None
-                            
-                            update_data = {
-                                "product_code": new_product_code,
-                                "product_name": new_product_name,
-                                "capacity": new_capacity,
-                                "inspection_category": new_inspection_category,
-                                "used_container_id": container_options.get(new_used_container) if new_used_container != '未設定' else None,
-                                "lead_time": new_lead_time,
-                                "fixed_point_days": new_fixed_point_days,
-                                "can_advance": new_can_advance,
-                                "used_truck_ids": used_truck_ids_str
-                            }
-                            success = self.production_service.update_product(product.id, update_data)
-                            if success:
-                                st.success(f"製品 '{product.product_code}' を更新しました")
-                                st.rerun()
-                            else:
-                                st.error("製品更新に失敗しました")
-                    
-                    # 削除ボタン
-                    col_del1, col_del2 = st.columns([1, 5])
-                    with col_del1:
-                        if st.button("🗑️ 削除", key=f"delete_product_{product.id}", type="secondary"):
-                            if st.session_state.get(f"confirm_delete_{product.id}", False):
-                                success = self.production_service.delete_product(product.id)
-                                if success:
-                                    st.success(f"製品 '{product.product_code}' を削除しました")
-                                    st.rerun()
-                                else:
-                                    st.error("製品削除に失敗しました")
-                            else:
-                                st.session_state[f"confirm_delete_{product.id}"] = True
-                                st.warning("もう一度クリックすると削除されます")
-            
-            # 統計情報
-            st.subheader("📊 製品統計")
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                st.metric("登録製品数", len(products))
-            with col2:
-                can_advance_count = sum(1 for p in products if getattr(p, 'can_advance', False))
-                st.metric("前倒可能製品", can_advance_count)
-            with col3:
-                n_count = sum(1 for p in products if p.inspection_category == 'N')
-                st.metric("検査区分N", n_count)
-            with col4:
-                avg_capacity = sum(p.capacity or 0 for p in products) / len(products) if products else 0
-                st.metric("平均入り数", f"{avg_capacity:.0f}")
-        
-        except Exception as e:
-            st.error(f"製品一覧エラー: {e}")
-            import traceback
-            st.code(traceback.format_exc())
     
     def _show_product_registration(self):
         """新規製品登録"""
