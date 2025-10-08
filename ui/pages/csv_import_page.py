@@ -135,23 +135,24 @@ class CSVImportPage:
         session = self.import_service.db.get_session()
         
         try:
-            # 当日～2週間後
-            today = date.today() - timedelta(days=5)
-            end_date = today + timedelta(days=14)
+            # 日付範囲を調整（当日～1ヶ月後）
+            today = date.today()-timedelta(days=30)
+            end_date = today + timedelta(days=30)
             
+            # production_instructions_detailテーブルから直接検査区分を取得
             query = text("""
                 SELECT 
-                    dp.delivery_date as 日付,
-                    dp.order_id as オーダーID,
+                    pid.instruction_date as 日付,
+                    pid.id as 指示ID,
+                    pid.inspection_category as 検査区分,
+                    pid.instruction_quantity as 受注数,
                     p.product_code as 製品コード,
-                    p.product_name as 製品名,
-                    dp.order_quantity as 受注数,
-                    p.inspection_category as 検査区分
-                FROM delivery_progress dp
-                LEFT JOIN products p ON dp.product_id = p.id
-                WHERE dp.delivery_date BETWEEN :start_date AND :end_date
-                    AND (p.inspection_category LIKE '%F%' OR p.inspection_category LIKE '%$%')
-                ORDER BY dp.delivery_date, p.product_code
+                    p.product_name as 製品名
+                FROM production_instructions_detail pid
+                LEFT JOIN products p ON pid.product_id = p.id
+                WHERE pid.instruction_date BETWEEN :start_date AND :end_date
+                    AND (pid.inspection_category LIKE '%F%' OR pid.inspection_category LIKE '%$%')
+                ORDER BY pid.instruction_date, pid.inspection_category
             """)
             
             result = session.execute(query, {
@@ -167,26 +168,95 @@ class CSVImportPage:
                 df = pd.DataFrame(rows, columns=result.keys())
                 df['日付'] = pd.to_datetime(df['日付']).dt.date
                 
+                # 検査区分ごとの集計
+                f_products = df[df['検査区分'].str.contains('F', na=False)]
+                dollar_products = df[df['検査区分'].str.contains(r'\$', regex=True, na=False)]
+                
                 col_sum1, col_sum2, col_sum3 = st.columns(3)
                 with col_sum1:
-                    f_count = len(df[df['検査区分'].str.contains('F', na=False)])
-                    st.metric("F含む（最終検査）", f_count)
+                    f_count = len(f_products)
+                    f_total = f_products['受注数'].sum()
+                    st.metric("Fを含む（最終検査）", f"{f_count}件 / {f_total:,}個")
                 with col_sum2:
-                    # $マークを含む検査区分をカウント
-                    dollar_pattern = r'\$'
-                    s_count = len(df[df['検査区分'].str.contains(dollar_pattern, regex=True, na=False)])
-                    st.metric("$含む（目視検査）", s_count)
+                    s_count = len(dollar_products)
+                    s_total = dollar_products['受注数'].sum()
+                    st.metric("$を含む（目視検査）", f"{s_count}件 / {s_total:,}個")
                 with col_sum3:
-                    st.metric("総数量", f"{df['受注数'].sum():,}個")
+                    total_count = len(df)
+                    total_quantity = df['受注数'].sum()
+                    st.metric("総計", f"{total_count}件 / {total_quantity:,}個")
+                
+                # 検査区分ごとの詳細サマリー
+                st.subheader("🔍 検査区分別サマリー")
+                category_summary = df.groupby('検査区分').agg({
+                    '指示ID': 'count',
+                    '受注数': 'sum'
+                }).rename(columns={'指示ID': '件数', '受注数': '総数量'}).reset_index()
                 
                 st.dataframe(
-                    df,
+                    category_summary,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "件数": st.column_config.NumberColumn("件数", format="%d件"),
+                        "総数量": st.column_config.NumberColumn("総数量", format="%d個"),
+                    }
+                )
+                
+                # 日付ごとの集計も表示
+                st.subheader("📅 日付別サマリー")
+                daily_summary = df.groupby('日付').agg({
+                    '指示ID': 'count',
+                    '受注数': 'sum'
+                }).rename(columns={'指示ID': '件数', '受注数': '総数量'}).reset_index()
+                
+                st.dataframe(
+                    daily_summary,
                     use_container_width=True,
                     hide_index=True,
                     column_config={
                         "日付": st.column_config.DateColumn("日付", format="YYYY-MM-DD"),
+                        "件数": st.column_config.NumberColumn("件数", format="%d件"),
+                        "総数量": st.column_config.NumberColumn("総数量", format="%d個"),
                     }
                 )
+                
+                # 製品ごとの集計
+                st.subheader("📦 製品別サマリー")
+                product_summary = df.groupby(['製品コード', '製品名']).agg({
+                    '指示ID': 'count',
+                    '受注数': 'sum'
+                }).rename(columns={'指示ID': '件数', '受注数': '総数量'}).reset_index()
+                
+                st.dataframe(
+                    product_summary,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "件数": st.column_config.NumberColumn("件数", format="%d件"),
+                        "総数量": st.column_config.NumberColumn("総数量", format="%d個"),
+                    }
+                )
+                
+                st.subheader("📋 詳細データ")
+                st.dataframe(
+                    df[['日付', '指示ID', '製品コード', '製品名', '検査区分', '受注数']],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "日付": st.column_config.DateColumn("日付", format="YYYY-MM-DD"),
+                        "受注数": st.column_config.NumberColumn("受注数", format="%d個"),
+                    }
+                )
+                
+                # 注意事項
+                st.info("""
+                **💡 注意事項:**
+                - **Fを含む**: 最終検査が必要な製品
+                - **$を含む**: 目視検査が必要な製品  
+                - これらの製品は特別な検査プロセスが必要です
+                - 生産計画時に検査工程の時間を確保してください
+                """)
         
         except Exception as e:
             st.error(f"検査対象製品確認エラー: {e}")

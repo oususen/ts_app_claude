@@ -29,13 +29,13 @@ class CSVImportService:
             if len(v3_rows) == 0:
                 return False, "V3行（数量データ）が見つかりませんでした"
             
-            # 製品情報をインポート（検査区分ごとに分けて登録）
+            # 製品情報をインポート（新しいproductsテーブルを使用）
             product_ids = self._import_basic_data(v3_rows)
             
             if not product_ids:
                 return False, "製品情報のインポートに失敗しました"
             
-            # 生産指示データを処理（検査区分ごとに分けて登録）
+            # 生産指示データを処理
             success, count = self._process_instruction_data(v2_rows, v3_rows, product_ids)
             
             if not success:
@@ -53,7 +53,7 @@ class CSVImportService:
             return False, error_msg
     
     def _import_basic_data(self, df: pd.DataFrame) -> Dict:
-        """製品基本情報をインポート（検査区分ごとに分けて登録）"""
+        """製品基本情報をインポート（新しいproductsテーブルを使用）"""
         product_ids = {}
         session = self.db.get_session()
         
@@ -61,12 +61,39 @@ class CSVImportService:
             from sqlalchemy import text
             
             for _, row in df.iterrows():
-                # ✅ 検査区分も含めたユニークキー
-                unique_key = (int(row['データＮＯ']), row['品番'], row['検査区分'])
+                product_code = row['品番']
                 
-                # 既存チェック（検査区分も含む）
+                # ✅ 1. 新しいproductsテーブルに保存（product_codeのみで識別）
                 result = session.execute(text("""
                     SELECT id FROM products 
+                    WHERE product_code = :product_code
+                """), {'product_code': product_code}).fetchone()
+                
+                if result:
+                    simple_product_id = result[0]
+                else:
+                    # 新規登録（新しいproductsテーブル）
+                    result = session.execute(text("""
+                        INSERT INTO products (
+                            product_code, product_name, delivery_location,
+                            box_type, capacity
+                        ) VALUES (
+                            :product_code, :product_name, :delivery_location,
+                            :box_type, :capacity
+                        )
+                    """), {
+                        'product_code': product_code,
+                        'product_name': row['品名'],
+                        'delivery_location': row['納入場所'],
+                        'box_type': row['箱種'],
+                        'capacity': int(row['収容数']) if str(row['収容数']).strip() else 1
+                    })
+                    simple_product_id = result.lastrowid
+                
+                # ✅ 2. 既存のproducts_syosaiテーブルにも保存（全データ）
+                unique_key = (int(row['データＮＯ']), product_code, row['検査区分'])
+                result = session.execute(text("""
+                    SELECT id FROM products_syosai 
                     WHERE data_no = :data_no 
                     AND product_code = :product_code 
                     AND inspection_category = :inspection_category
@@ -76,37 +103,39 @@ class CSVImportService:
                     'inspection_category': unique_key[2]
                 }).fetchone()
                 
-                if result:
-                    product_id = result[0]
-                else:
-                    # 新規登録（検査区分ごとに別製品として登録）
+                if not result:
+                    # 既存の詳細登録ロジックでproducts_syosaiに保存（全列）
                     sql = text("""
-                        INSERT INTO products (
+                        INSERT INTO products_syosai (
                             data_no, factory, client_code, calculation_date, production_complete_date,
                             modified_factory, product_category, product_code, ac_code, processing_content,
                             product_name, delivery_location, box_type, capacity, grouping_category,
                             form_category, inspection_category, ordering_category, regular_replenishment_category,
                             lead_time, fixed_point_days, shipping_factory, client_product_code,
-                            purchasing_org, item_group, processing_type, inventory_transfer_category
+                            purchasing_org, item_group, processing_type, inventory_transfer_category,
+                            container_width, container_depth, container_height, stackable, can_advance,
+                            used_container_id, used_truck_ids
                         ) VALUES (
                             :data_no, :factory, :client_code, :calculation_date, :production_complete_date,
                             :modified_factory, :product_category, :product_code, :ac_code, :processing_content,
                             :product_name, :delivery_location, :box_type, :capacity, :grouping_category,
                             :form_category, :inspection_category, :ordering_category, :regular_replenishment_category,
                             :lead_time, :fixed_point_days, :shipping_factory, :client_product_code,
-                            :purchasing_org, :item_group, :processing_type, :inventory_transfer_category
+                            :purchasing_org, :item_group, :processing_type, :inventory_transfer_category,
+                            :container_width, :container_depth, :container_height, :stackable, :can_advance,
+                            :used_container_id, :used_truck_ids
                         )
                     """)
                     
-                    result = session.execute(sql, {
+                    params = {
                         'data_no': int(row['データＮＯ']),
                         'factory': row['工場'],
-                        'client_code': int(row['取引先']),
+                        'client_code': int(row['取引先']) if str(row['取引先']).strip() else 0,
                         'calculation_date': self._parse_japanese_date(str(row['計算日'])),
                         'production_complete_date': self._parse_japanese_date(str(row['生産完了日'])),
                         'modified_factory': row['工場（変更対応）'],
                         'product_category': row['品区'],
-                        'product_code': row['品番'],
+                        'product_code': product_code,
                         'ac_code': row['A/C'],
                         'processing_content': row['加工内容'],
                         'product_name': row['品名'],
@@ -125,13 +154,20 @@ class CSVImportService:
                         'purchasing_org': row['購買組織'],
                         'item_group': row['品目グループ'],
                         'processing_type': row['加工区分'],
-                        'inventory_transfer_category': row['在庫転送区分']
-                    })
+                        'inventory_transfer_category': row['在庫転送区分'],
+                        'container_width': None,
+                        'container_depth': None,
+                        'container_height': None,
+                        'stackable': 1,
+                        'can_advance': 0,
+                        'used_container_id': None,
+                        'used_truck_ids': None
+                    }
                     
-                    product_id = result.lastrowid
+                    session.execute(sql, params)
                 
-                # ✅ 検査区分を含むキーで管理
-                product_ids[unique_key] = product_id
+                # ✅ 3. マッピング：既存コードを新しいテーブル参照に変更
+                product_ids[unique_key] = simple_product_id
             
             session.commit()
             return product_ids
@@ -145,7 +181,7 @@ class CSVImportService:
     def _process_instruction_data(self, v2_rows: pd.DataFrame, 
                                   v3_rows: pd.DataFrame, 
                                   product_ids: Dict) -> Tuple[bool, int]:
-        """生産指示データを処理（検査区分ごとに分けて登録）"""
+        """生産指示データを処理"""
         session = self.db.get_session()
         instruction_count = 0
         
@@ -153,7 +189,7 @@ class CSVImportService:
             from sqlalchemy import text
             
             for idx, v3_row in v3_rows.iterrows():
-                # ✅ 検査区分を含むユニークキー
+                # ✅ 検査区分を含むユニークキー（マッピング用）
                 unique_key = (int(v3_row['データＮＯ']), v3_row['品番'], v3_row['検査区分'])
                 product_id = product_ids.get(unique_key)
                 
@@ -281,7 +317,7 @@ class CSVImportService:
             for product_key, product_id in product_ids.items():
                 data_no, product_code, inspection_category = product_key
                 
-                # この製品（検査区分含む）の生産指示データを取得
+                # この製品の生産指示データを取得
                 instructions = session.execute(text("""
                     SELECT 
                         instruction_date,
