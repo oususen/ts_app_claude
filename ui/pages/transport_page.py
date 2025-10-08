@@ -6,6 +6,14 @@ from typing import Dict
 from ui.components.forms import FormComponents
 from ui.components.tables import TableComponents
 from services.transport_service import TransportService
+import io
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
+from reportlab.lib.units import mm
+from reportlab.pdfgen import canvas
+import os
 
 class TransportPage:
     """配送便計画ページ - トラック積載計画の作成画面"""
@@ -385,17 +393,85 @@ class TransportPage:
         """保存済み計画を表形式で表示・編集"""
         try:
             st.subheader("計画詳細")
+   
             
-            # ✅ デバッグ: 実際のデータ構造を確認
-            # st.write("🔍 デバッグ情報:")
-            # st.json({
-            #     "plan_data_keys": list(plan_data.keys()) if plan_data else "None",
-            #     "has_daily_plans": "daily_plans" in plan_data if plan_data else False,
-            #     "daily_plans_type": type(plan_data.get('daily_plans')) if plan_data else "None",
-            #     "daily_plans_keys": list(plan_data.get('daily_plans', {}).keys()) if plan_data and plan_data.get('daily_plans') else "None"
-            # })
+            # ✅ 出力形式選択とエクスポートボタン
+            st.markdown("---")
+            st.subheader("📤 計画のエクスポート")
             
-            # データ取得
+            col_export1, col_export2, col_export3 = st.columns([2, 1, 1])
+            
+            with col_export1:
+                # 出力形式選択
+                export_format = st.radio(
+                    "出力形式を選択",
+                    options=["📊 Excel形式", "📄 PDF形式"],
+                    horizontal=True,
+                    key=f"export_format_{plan_data.get('id', 'current')}"
+                )
+            
+            with col_export2:
+                # エクスポートボタン
+                if st.button("🔄 エクスポート", type="primary", use_container_width=True):
+                    with st.spinner("エクスポート中..."):
+                        if export_format == "📊 Excel形式":
+                            # Excelエクスポート
+                            excel_buffer = self._export_plan_to_excel(plan_data)
+                            if excel_buffer:
+                                st.download_button(
+                                    label="⬇️ Excelダウンロード",
+                                    data=excel_buffer,
+                                    file_name=f"積載計画_{plan_data.get('plan_name', '無題')}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    use_container_width=True,
+                                    key=f"excel_dl_{plan_data.get('id', 'current')}"
+                                )
+                        else:
+                            # PDFエクスポート
+                            pdf_buffer = self._export_plan_to_pdf(plan_data)
+                            if pdf_buffer:
+                                st.download_button(
+                                    label="⬇️ PDFダウンロード",
+                                    data=pdf_buffer,
+                                    file_name=f"積載計画_{plan_data.get('plan_name', '無題')}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                                    mime="application/pdf",
+                                    use_container_width=True,
+                                    key=f"pdf_dl_{plan_data.get('id', 'current')}"
+                                )
+            
+            with col_export3:
+                # クイックエクスポートボタン（両方）
+                if st.button("📁 両方出力", type="secondary", use_container_width=True):
+                    with st.spinner("両方の形式で出力中..."):
+                        # Excel出力
+                        excel_buffer = self._export_plan_to_excel(plan_data)
+                        # PDF出力
+                        pdf_buffer = self._export_plan_to_pdf(plan_data)
+                        
+                        if excel_buffer and pdf_buffer:
+                            col_dl1, col_dl2 = st.columns(2)
+                            with col_dl1:
+                                st.download_button(
+                                    label="⬇️ Excelダウンロード",
+                                    data=excel_buffer,
+                                    file_name=f"積載計画_{plan_data.get('plan_name', '無題')}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    use_container_width=True,
+                                    key=f"excel_both_{plan_data.get('id', 'current')}"
+                                )
+                            with col_dl2:
+                                st.download_button(
+                                    label="⬇️ PDFダウンロード",
+                                    data=pdf_buffer,
+                                    file_name=f"積載計画_{plan_data.get('plan_name', '無題')}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                                    mime="application/pdf",
+                                    use_container_width=True,
+                                    key=f"pdf_both_{plan_data.get('id', 'current')}"
+                                )
+            
+            st.markdown("---")
+      
+            
             summary = plan_data.get('summary', {})
             daily_plans = plan_data.get('daily_plans', {})
             unloaded_tasks = plan_data.get('unloaded_tasks', [])
@@ -515,6 +591,302 @@ class TransportPage:
             st.error(f"計画表示エラー: {str(e)}")
             import traceback
             st.code(traceback.format_exc()) 
+
+
+    def _export_plan_to_pdf(self, plan_data: Dict):
+        """積載計画をPDFとしてエクスポート（日本語対応）"""
+        try:
+            # PDFバッファを作成
+            buffer = io.BytesIO()
+            
+            # 横向きA4でドキュメント作成
+            doc = SimpleDocTemplate(buffer, pagesize=landscape(A4))
+            elements = []
+            styles = getSampleStyleSheet()
+            
+            # ✅ 日本語フォントの設定
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+            from reportlab.lib.fonts import addMapping
+            
+            # 日本語フォントの登録（システムにインストールされているフォントを使用）
+            try:
+                # Windowsの日本語フォント
+                pdfmetrics.registerFont(TTFont('Japanese', 'C:/Windows/Fonts/msgothic.ttc'))
+                pdfmetrics.registerFont(TTFont('Japanese-Bold', 'C:/Windows/Fonts/msgothic.ttc'))
+            except:
+                try:
+                    # macOSの日本語フォント
+                    pdfmetrics.registerFont(TTFont('Japanese', '/System/Library/Fonts/Arial Unicode.ttf'))
+                    pdfmetrics.registerFont(TTFont('Japanese-Bold', '/System/Library/Fonts/Arial Unicode.ttf'))
+                except:
+                    try:
+                        # Linuxの日本語フォント
+                        pdfmetrics.registerFont(TTFont('Japanese', '/usr/share/fonts/truetype/takao-gothic/TakaoPGothic.ttf'))
+                        pdfmetrics.registerFont(TTFont('Japanese-Bold', '/usr/share/fonts/truetype/takao-gothic/TakaoPGothic.ttf'))
+                    except:
+                        st.warning("日本語フォントが見つかりません。デフォルトフォントを使用します。")
+            
+            # フォントマッピングの設定
+            addMapping('Japanese', 0, 0, 'Japanese')
+            addMapping('Japanese', 1, 0, 'Japanese-Bold')
+            
+            # ✅ 日本語対応スタイルの作成
+            japanese_style = styles['Normal'].clone('JapaneseStyle')
+            japanese_style.fontName = 'Japanese'
+            japanese_style.fontSize = 10
+            japanese_style.leading = 12
+            
+            japanese_title_style = styles['Heading1'].clone('JapaneseTitleStyle')
+            japanese_title_style.fontName = 'Japanese-Bold'
+            japanese_title_style.fontSize = 16
+            japanese_title_style.leading = 20
+            japanese_title_style.alignment = 1  # 中央揃え
+            
+            japanese_heading_style = styles['Heading2'].clone('JapaneseHeadingStyle')
+            japanese_heading_style.fontName = 'Japanese-Bold'
+            japanese_heading_style.fontSize = 12
+            japanese_heading_style.leading = 16
+            
+            # タイトル
+            title = Paragraph(f"積載計画: {plan_data.get('plan_name', '無題')}", japanese_title_style)
+            elements.append(title)
+            elements.append(Spacer(1, 12))
+            
+            # 計画情報
+            summary = plan_data.get('summary', {})
+            info_data = [
+                ['計画期間', plan_data.get('period', '')],
+                ['計画日数', f"{summary.get('total_days', 0)}日"],
+                ['総便数', f"{summary.get('total_trips', 0)}便"],
+                ['ステータス', summary.get('status', '不明')],
+                ['作成日', datetime.now().strftime('%Y-%m-%d %H:%M')]
+            ]
+            
+            # ✅ 日本語フォントを使用したテーブルスタイル
+            info_table = Table(info_data, colWidths=[80*mm, 80*mm])
+            info_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.lightblue),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, -1), 'Japanese'),  # ✅ 日本語フォント指定
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black)
+            ]))
+            elements.append(info_table)
+            elements.append(Spacer(1, 12))
+            
+            # 積載計画データ
+            daily_plans = plan_data.get('daily_plans', {})
+            
+            if daily_plans:
+                # 全データを収集
+                all_plan_data = []
+                header = ['積載日', 'トラック', '製品コード', '製品名', '容器数', '合計数量', '納期']
+                all_plan_data.append(header)
+                
+                for date_str in sorted(daily_plans.keys()):
+                    day_plan = daily_plans[date_str]
+                    
+                    for truck in day_plan.get('trucks', []):
+                        truck_name = truck.get('truck_name', '不明')
+                        
+                        for item in truck.get('loaded_items', []):
+                            # 納期のフォーマット処理
+                            delivery_date = item.get('delivery_date')
+                            delivery_date_str = ''
+                            if delivery_date:
+                                if hasattr(delivery_date, 'strftime'):
+                                    delivery_date_str = delivery_date.strftime('%Y-%m-%d')
+                                elif hasattr(delivery_date, 'date'):
+                                    delivery_date_str = delivery_date.date().strftime('%Y-%m-%d')
+                                else:
+                                    delivery_date_str = str(delivery_date)
+                            
+                            row = [
+                                date_str,
+                                truck_name,
+                                item.get('product_code', ''),
+                                item.get('product_name', ''),
+                                str(item.get('num_containers', 0)),
+                                str(item.get('total_quantity', 0)),
+                                delivery_date_str
+                            ]
+                            all_plan_data.append(row)
+                
+                # テーブル作成
+                if len(all_plan_data) > 1:  # ヘッダー以外にデータがある場合
+                    # テーブル幅の計算（横向きA4に合わせて調整）
+                    col_widths = [25*mm, 25*mm, 25*mm, 40*mm, 15*mm, 20*mm, 25*mm]
+                    
+                    plan_table = Table(all_plan_data, colWidths=col_widths, repeatRows=1)
+                    plan_table.setStyle(TableStyle([
+                        ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
+                        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                        ('FONTNAME', (0, 0), (-1, -1), 'Japanese'),  # ✅ 日本語フォント指定
+                        ('FONTSIZE', (0, 0), (-1, 0), 8),
+                        ('FONTSIZE', (0, 1), (-1, -1), 7),
+                        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+                        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+                        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                        ('WORDWRAP', (0, 0), (-1, -1), True)  # 文字列の折り返し
+                    ]))
+                    elements.append(plan_table)
+                else:
+                    elements.append(Paragraph("積載計画データがありません", japanese_style))
+            else:
+                elements.append(Paragraph("積載計画データがありません", japanese_style))
+            
+            # 警告情報
+            warnings_data = []
+            for date_str, day_plan in daily_plans.items():
+                for warning in day_plan.get('warnings', []):
+                    warnings_data.append([date_str, warning])
+            
+            if warnings_data:
+                elements.append(Spacer(1, 12))
+                elements.append(Paragraph("警告一覧", japanese_heading_style))
+                warnings_header = ['日付', '警告内容']
+                warnings_table_data = [warnings_header] + warnings_data
+                
+                warnings_table = Table(warnings_table_data, colWidths=[30*mm, 150*mm])
+                warnings_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.orange),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                    ('FONTNAME', (0, 0), (-1, -1), 'Japanese'),  # ✅ 日本語フォント指定
+                    ('FONTSIZE', (0, 0), (-1, -1), 7),
+                    ('BACKGROUND', (0, 1), (-1, -1), colors.lightyellow),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.black)
+                ]))
+                elements.append(warnings_table)
+            
+            # PDF生成
+            doc.build(elements)
+            buffer.seek(0)
+            
+            return buffer
+            
+        except Exception as e:
+            st.error(f"PDF生成エラー: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
+            return None
+    def _export_plan_to_excel(self, plan_data: Dict):
+        """積載計画をExcelとしてエクスポート"""
+        try:
+            from io import BytesIO
+            import pandas as pd
+            
+            # メモリバッファを作成
+            output = BytesIO()
+            
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                # サマリーシート
+                summary = plan_data.get('summary', {})
+                summary_data = [
+                    ['計画名', plan_data.get('plan_name', '無題')],
+                    ['計画期間', plan_data.get('period', '')],
+                    ['計画日数', f"{summary.get('total_days', 0)}日"],
+                    ['総便数', f"{summary.get('total_trips', 0)}便"],
+                    ['ステータス', summary.get('status', '不明')],
+                    ['出力日時', datetime.now().strftime('%Y-%m-%d %H:%M')]
+                ]
+                summary_df = pd.DataFrame(summary_data, columns=['項目', '値'])
+                summary_df.to_excel(writer, sheet_name='計画サマリー', index=False)
+                
+                # 積載計画詳細シート
+                daily_plans = plan_data.get('daily_plans', {})
+                if daily_plans:
+                    plan_data_list = []
+                    
+                    for date_str in sorted(daily_plans.keys()):
+                        day_plan = daily_plans[date_str]
+                        
+                        for truck in day_plan.get('trucks', []):
+                            truck_name = truck.get('truck_name', '不明')
+                            utilization = truck.get('utilization', {})
+                            
+                            for item in truck.get('loaded_items', []):
+                                # 納期のフォーマット処理
+                                delivery_date = item.get('delivery_date')
+                                delivery_date_str = ''
+                                if delivery_date:
+                                    if hasattr(delivery_date, 'strftime'):
+                                        delivery_date_str = delivery_date.strftime('%Y-%m-%d')
+                                    elif hasattr(delivery_date, 'date'):
+                                        delivery_date_str = delivery_date.date().strftime('%Y-%m-%d')
+                                    else:
+                                        delivery_date_str = str(delivery_date)
+                                
+                                plan_data_list.append({
+                                    '積載日': date_str,
+                                    'トラック名': truck_name,
+                                    '製品コード': item.get('product_code', ''),
+                                    '製品名': item.get('product_name', ''),
+                                    '容器数': item.get('num_containers', 0),
+                                    '合計数量': item.get('total_quantity', 0),
+                                    '納期': delivery_date_str,
+                                    '体積積載率(%)': utilization.get('volume_rate', 0),
+                                    '重量積載率(%)': utilization.get('weight_rate', 0),
+                                    '前倒し配送': '○' if item.get('is_advanced', False) else '×'
+                                })
+                    
+                    if plan_data_list:
+                        plan_df = pd.DataFrame(plan_data_list)
+                        plan_df.to_excel(writer, sheet_name='積載計画詳細', index=False)
+                
+                # 警告シート
+                warnings_data = []
+                for date_str, day_plan in daily_plans.items():
+                    for warning in day_plan.get('warnings', []):
+                        warnings_data.append({
+                            '日付': date_str,
+                            '警告内容': warning
+                        })
+                
+                if warnings_data:
+                    warnings_df = pd.DataFrame(warnings_data)
+                    warnings_df.to_excel(writer, sheet_name='警告一覧', index=False)
+                
+                # 積載不可アイテムシート
+                unloaded_tasks = plan_data.get('unloaded_tasks', [])
+                if unloaded_tasks:
+                    unloaded_data = []
+                    for task in unloaded_tasks:
+                        delivery_date = task.get('delivery_date')
+                        delivery_date_str = ''
+                        if delivery_date:
+                            if hasattr(delivery_date, 'strftime'):
+                                delivery_date_str = delivery_date.strftime('%Y-%m-%d')
+                            elif hasattr(delivery_date, 'date'):
+                                delivery_date_str = delivery_date.date().strftime('%Y-%m-%d')
+                            else:
+                                delivery_date_str = str(delivery_date)
+                        
+                        unloaded_data.append({
+                            '製品コード': task.get('product_code', ''),
+                            '製品名': task.get('product_name', ''),
+                            '容器数': task.get('num_containers', 0),
+                            '合計数量': task.get('total_quantity', 0),
+                            '納期': delivery_date_str,
+                            '理由': task.get('reason', '積載容量不足')
+                        })
+                    
+                    unloaded_df = pd.DataFrame(unloaded_data)
+                    unloaded_df.to_excel(writer, sheet_name='積載不可アイテム', index=False)
+            
+            output.seek(0)
+            return output
+            
+        except Exception as e:
+            st.error(f"Excelエクスポートエラー: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
+            return None
 
     def _show_daily_view(self, daily_plans):
         """日別表示"""
