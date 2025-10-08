@@ -210,8 +210,12 @@ class LoadingPlanRepository:
             session.close()    
 
     
+   
+
+# app/repository/loading_plan_repository.py の get_loading_plan メソッドを完全修正
+
     def get_loading_plan(self, plan_id: int) -> Dict[str, Any]:
-        """積載計画を取得"""
+        """積載計画を取得 - daily_plans付き完全版"""
         session = self.db.get_session()
         
         try:
@@ -222,7 +226,11 @@ class LoadingPlanRepository:
             header_result = session.execute(header_sql, {'plan_id': plan_id}).fetchone()
             
             if not header_result:
+                print(f"❌ ヘッダーが見つかりません: plan_id={plan_id}")
                 return None
+            
+            header = dict(header_result._mapping)
+            print(f"✅ ヘッダー取得成功: {header}")
             
             # 明細取得
             detail_sql = text("""
@@ -231,6 +239,7 @@ class LoadingPlanRepository:
                 ORDER BY loading_date, truck_id, trip_number
             """)
             details = session.execute(detail_sql, {'plan_id': plan_id}).fetchall()
+            print(f"✅ 明細取得: {len(details)}件")
             
             # 警告取得
             warning_sql = text("""
@@ -244,18 +253,129 @@ class LoadingPlanRepository:
             """)
             unloaded = session.execute(unloaded_sql, {'plan_id': plan_id}).fetchall()
             
+            # ✅ daily_plansを再構築
+            daily_plans = {}
+            
+            for detail in details:
+                detail_dict = dict(detail._mapping)
+                loading_date = detail_dict['loading_date']
+                
+                # 日付をstrに変換
+                if hasattr(loading_date, 'strftime'):
+                    date_str = loading_date.strftime('%Y-%m-%d')
+                else:
+                    date_str = str(loading_date)
+                
+                if date_str not in daily_plans:
+                    daily_plans[date_str] = {
+                        'trucks': [],
+                        'total_trips': 0,
+                        'warnings': []
+                    }
+                
+                # トラックを検索または新規作成
+                truck_id = detail_dict['truck_id']
+                truck = next((t for t in daily_plans[date_str]['trucks'] 
+                            if t['truck_id'] == truck_id), None)
+                
+                if not truck:
+                    truck = {
+                        'truck_id': truck_id,
+                        'truck_name': detail_dict.get('truck_name', '不明'),
+                        'loaded_items': [],
+                        'utilization': {
+                            'volume_rate': float(detail_dict.get('volume_utilization', 0)),
+                            'weight_rate': float(detail_dict.get('weight_utilization', 0))
+                        }
+                    }
+                    daily_plans[date_str]['trucks'].append(truck)
+                    daily_plans[date_str]['total_trips'] += 1
+                
+                # アイテム追加
+                delivery_date = detail_dict.get('delivery_date')
+                if delivery_date:
+                    if hasattr(delivery_date, 'date'):
+                        delivery_date = delivery_date.date() if hasattr(delivery_date, 'date') else delivery_date
+                
+                truck['loaded_items'].append({
+                    'product_id': detail_dict.get('product_id'),
+                    'product_code': detail_dict.get('product_code', ''),
+                    'product_name': detail_dict.get('product_name', ''),
+                    'container_id': detail_dict.get('container_id'),
+                    'num_containers': int(detail_dict.get('num_containers', 0)),
+                    'total_quantity': int(detail_dict.get('total_quantity', 0)),
+                    'delivery_date': delivery_date,
+                    'is_advanced': bool(detail_dict.get('is_advanced', False))
+                })
+            
+            # 警告を追加
+            for warning in warnings:
+                warning_dict = dict(warning._mapping)
+                warning_date = warning_dict['warning_date']
+                
+                if hasattr(warning_date, 'strftime'):
+                    date_str = warning_date.strftime('%Y-%m-%d')
+                else:
+                    date_str = str(warning_date)
+                
+                if date_str in daily_plans:
+                    daily_plans[date_str]['warnings'].append(
+                        warning_dict.get('warning_message', '')
+                    )
+            
+            # 積載不可タスク
+            unloaded_tasks = []
+            for task in unloaded:
+                task_dict = dict(task._mapping)
+                
+                delivery_date = task_dict.get('delivery_date')
+                if delivery_date:
+                    if hasattr(delivery_date, 'date'):
+                        delivery_date = delivery_date.date() if hasattr(delivery_date, 'date') else delivery_date
+                
+                unloaded_tasks.append({
+                    'product_id': task_dict.get('product_id'),
+                    'product_code': task_dict.get('product_code', ''),
+                    'product_name': task_dict.get('product_name', ''),
+                    'container_id': task_dict.get('container_id'),
+                    'num_containers': int(task_dict.get('num_containers', 0)),
+                    'total_quantity': int(task_dict.get('total_quantity', 0)),
+                    'delivery_date': delivery_date,
+                    'reason': task_dict.get('reason', '')
+                })
+            
+            # サマリー作成
+            summary = {
+                'total_days': int(header.get('total_days', 0)),
+                'total_trips': int(header.get('total_trips', 0)),
+                'status': header.get('status', '不明'),
+                'total_warnings': len(warnings),
+                'unloaded_count': len(unloaded_tasks)
+            }
+            
+            print(f"✅ daily_plans作成: {len(daily_plans)}日分")
+            print(f"✅ summary: {summary}")
+            
             return {
-                'header': dict(header_result._mapping),
+                'id': plan_id,
+                'plan_name': header.get('plan_name', ''),
+                'header': header,
                 'details': [dict(row._mapping) for row in details],
                 'warnings': [dict(row._mapping) for row in warnings],
-                'unloaded': [dict(row._mapping) for row in unloaded]
+                'unloaded': [dict(row._mapping) for row in unloaded],
+                'daily_plans': daily_plans,  # ✅ 追加
+                'summary': summary,          # ✅ 追加
+                'unloaded_tasks': unloaded_tasks,  # ✅ 追加
+                'period': f"{header.get('start_date', '')} ~ {header.get('end_date', '')}"  # ✅ 追加
             }
             
         except SQLAlchemyError as e:
-            print(f"積載計画取得エラー: {e}")
+            print(f"❌ 積載計画取得エラー: {e}")
+            import traceback
+            traceback.print_exc()
             return None
         finally:
-            session.close()
+            session.close()    
     
     def get_all_plans(self) -> List[Dict]:
         """全積載計画のリスト取得"""
