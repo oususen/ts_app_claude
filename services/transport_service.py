@@ -13,6 +13,7 @@ from domain.models.transport import LoadingItem
 import pandas as pd
 from datetime import datetime
 from io import BytesIO
+import json
 
 
 class TransportService:
@@ -312,3 +313,51 @@ class TransportService:
             return df.to_csv(index=False, encoding='utf-8-sig')
         else:
             return ""
+    def update_loading_plan(self, plan_id: int, updates: List[Dict]) -> bool:
+        """積載計画を更新"""
+        try:
+            for update in updates:
+                # 明細更新
+                if 'detail_id' in update:
+                    success = self.loading_plan_repo.update_loading_plan_detail(
+                        update['detail_id'], 
+                        update['changes']
+                    )
+                    
+                    if success:
+                        # 編集履歴を保存
+                        history_data = {
+                            'plan_id': plan_id,
+                            'user_id': update.get('user_id', 'system'),
+                            'field_changed': 'detail_update',
+                            'old_value': str(update.get('old_values', {})),
+                            'new_value': str(update['changes']),
+                            'detail_id': update['detail_id']
+                        }
+                        self.loading_plan_repo.save_edit_history(history_data)
+            
+            return True
+            
+        except Exception as e:
+            print(f"計画更新エラー: {e}")
+            return False
+
+    def create_plan_version(self, plan_id: int, version_name: str, user_id: str = None) -> int:
+        """計画バージョンを作成"""
+        try:
+            # 現在の計画データを取得
+            current_plan = self.get_loading_plan(plan_id)
+            
+            version_data = {
+                'plan_id': plan_id,
+                'version_name': version_name,
+                'created_by': user_id or 'system',
+                'snapshot_data': json.dumps(current_plan, default=str),
+                'notes': f"手動バージョン作成: {version_name}"
+            }
+            
+            return self.loading_plan_repo.create_plan_version(version_data)
+            
+        except Exception as e:
+            print(f"バージョン作成エラー: {e}")
+            return 0        

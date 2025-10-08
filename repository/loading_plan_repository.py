@@ -429,3 +429,89 @@ class LoadingPlanRepository:
             return False
         finally:
             session.close()
+    def update_loading_plan_detail(self, detail_id: int, update_data: Dict[str, Any]) -> bool:
+        """積載計画明細を更新"""
+        session = self.db.get_session()
+        
+        try:
+            set_clauses = []
+            params = {'detail_id': detail_id}
+            
+            for key, value in update_data.items():
+                set_clauses.append(f"{key} = :{key}")
+                params[key] = value
+            
+            query = text(f"""
+                UPDATE loading_plan_detail
+                SET {', '.join(set_clauses)}
+                WHERE id = :detail_id
+            """)
+            
+            session.execute(query, params)
+            session.commit()
+            return True
+            
+        except SQLAlchemyError as e:
+            session.rollback()
+            print(f"計画明細更新エラー: {e}")
+            return False
+        finally:
+            session.close()
+
+    def save_edit_history(self, history_data: Dict[str, Any]) -> bool:
+        """編集履歴を保存"""
+        session = self.db.get_session()
+        
+        try:
+            query = text("""
+                INSERT INTO loading_plan_edit_history
+                (plan_id, user_id, field_changed, old_value, new_value, detail_id)
+                VALUES
+                (:plan_id, :user_id, :field_changed, :old_value, :new_value, :detail_id)
+            """)
+            
+            session.execute(query, history_data)
+            session.commit()
+            return True
+            
+        except SQLAlchemyError as e:
+            session.rollback()
+            print(f"編集履歴保存エラー: {e}")
+            return False
+        finally:
+            session.close()
+
+    def create_plan_version(self, version_data: Dict[str, Any]) -> int:
+        """計画バージョンを作成"""
+        session = self.db.get_session()
+        
+        try:
+            # 現在の最大バージョン番号を取得
+            max_version_query = text("""
+                SELECT COALESCE(MAX(version_number), 0) 
+                FROM loading_plan_versions 
+                WHERE plan_id = :plan_id
+            """)
+            max_version = session.execute(max_version_query, {
+                'plan_id': version_data['plan_id']
+            }).scalar()
+            
+            version_data['version_number'] = max_version + 1
+            
+            query = text("""
+                INSERT INTO loading_plan_versions
+                (plan_id, version_number, version_name, created_by, snapshot_data, notes)
+                VALUES
+                (:plan_id, :version_number, :version_name, :created_by, :snapshot_data, :notes)
+            """)
+            
+            result = session.execute(query, version_data)
+            session.commit()
+            return result.lastrowid
+            
+        except SQLAlchemyError as e:
+            session.rollback()
+            print(f"バージョン作成エラー: {e}")
+            return 0
+        finally:
+            session.close()
