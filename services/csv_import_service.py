@@ -304,6 +304,7 @@ class CSVImportService:
         """
         納入進度データを作成（製品コード統合版）
         ✅ 同じ製品コード×日付なら、検査区分が違っても数量を合計して1レコードにする
+        ✅ 修正：生産指示データも製品コードベースで集約して重複計上を防ぐ
         """
         session = self.db.get_session()
         progress_count = 0
@@ -311,47 +312,53 @@ class CSVImportService:
         try:
             from sqlalchemy import text
             
-            # ✅ ステップ1: 製品コードベースでデータを集約
-            consolidated_data = {}  # {(product_code, date): {'quantity': int, 'data_no': int, 'product_ids': [int]}}
+            # ✅ ステップ1: 生産指示データを製品コード×日付で直接集約
+            consolidated_instructions = {}
             
+            # 全ての生産指示データを製品コードベースで集約
+            all_instructions = session.execute(text("""
+                SELECT 
+                    p.product_code,
+                    pid.instruction_date,
+                    SUM(pid.instruction_quantity) as total_quantity
+                FROM production_instructions_detail pid
+                JOIN products p ON pid.product_id = p.id
+                WHERE pid.instruction_quantity > 0
+                GROUP BY p.product_code, pid.instruction_date
+                ORDER BY p.product_code, pid.instruction_date
+            """)).fetchall()
+            
+            for instruction in all_instructions:
+                product_code = instruction[0]
+                instruction_date = instruction[1]
+                total_quantity = instruction[2]
+                
+                key = (product_code, instruction_date)
+                consolidated_instructions[key] = total_quantity
+            
+            # ✅ ステップ2: 代表product_idのマッピングを作成
+            product_code_to_id = {}
             for product_key, product_id in product_ids.items():
                 data_no, product_code, inspection_category = product_key
-                
-                # この製品の生産指示データを取得
-                instructions = session.execute(text("""
-                    SELECT 
-                        instruction_date,
-                        instruction_quantity
-                    FROM production_instructions_detail
-                    WHERE product_id = :product_id
-                    AND instruction_quantity > 0
-                    ORDER BY instruction_date
-                """), {'product_id': product_id}).fetchall()
-                
-                for instruction in instructions:
-                    instruction_date = instruction[0]
-                    quantity = instruction[1]
-                    
-                    # ✅ 製品コード×日付でグルーピング
-                    key = (product_code, instruction_date)
-                    
-                    if key not in consolidated_data:
-                        consolidated_data[key] = {
-                            'quantity': 0,
-                            'data_no': data_no,
-                            'product_ids': []
-                        }
-                    
-                    # ✅ 数量を合計
-                    consolidated_data[key]['quantity'] += quantity
-                    consolidated_data[key]['product_ids'].append(product_id)
+                if product_code not in product_code_to_id:
+                    product_code_to_id[product_code] = product_id
             
-            # ✅ ステップ2: 集約したデータをdelivery_progressに登録
-            for (product_code, instruction_date), data in consolidated_data.items():
-                # 代表product_idを取得（最初のもの）
-                representative_product_id = data['product_ids'][0]
-                total_quantity = data['quantity']
-                data_no = data['data_no']
+            # ✅ ステップ3: 集約したデータをdelivery_progressに登録
+            for (product_code, instruction_date), total_quantity in consolidated_instructions.items():
+                if product_code not in product_code_to_id:
+                    continue
+                    
+                representative_product_id = product_code_to_id[product_code]
+                
+                # データNOを取得（最初に見つかったもの）
+                data_no = None
+                for product_key in product_ids.keys():
+                    if product_key[1] == product_code:
+                        data_no = product_key[0]
+                        break
+                
+                if not data_no:
+                    continue
                 
                 # オーダーIDを生成（製品コードベース）
                 order_id = f"ORD-{instruction_date.strftime('%Y%m%d')}-{product_code}"
@@ -363,35 +370,35 @@ class CSVImportService:
                 """), {'order_id': order_id}).fetchone()
                 
                 if existing:
-                    # ✅ 既存レコードがあれば数量を加算or更新
+                    # ✅ 既存レコードがあれば数量を更新（集約後の正しい数量で）
                     existing_id = existing[0]
                     existing_quantity = existing[1]
-                    #new_quantity = existing_quantity + total_quantity  加算の場合
-                    new_quantity =  total_quantity
                     
-                    session.execute(text("""
-                        UPDATE delivery_progress
-                        SET order_quantity = :new_quantity,
-                            notes = CONCAT(IFNULL(notes, ''), ' [追加インポート: +', :add_quantity, '個]')
-                        WHERE id = :progress_id
-                    """), {
-                        'progress_id': existing_id,
-                        'new_quantity': new_quantity,
-                        'add_quantity': total_quantity
-                    })
-                    
-                    progress_count += 1
+                    # 数量が異なる場合のみ更新
+                    if existing_quantity != total_quantity:
+                        session.execute(text("""
+                            UPDATE delivery_progress
+                            SET order_quantity = :new_quantity,
+                                notes = :notes
+                            WHERE id = :progress_id
+                        """), {
+                            'progress_id': existing_id,
+                            'new_quantity': total_quantity,
+                            'notes': f'製品コード: {product_code} (数量更新: {existing_quantity}→{total_quantity})'
+                        })
+                        
+                        progress_count += 1
                 else:
                     # ✅ 新規登録
                     session.execute(text("""
                         INSERT INTO delivery_progress
                         (order_id, product_id, order_date, delivery_date, 
-                         order_quantity, shipped_quantity, status, 
-                         customer_code, customer_name, priority, notes)
+                        order_quantity, shipped_quantity, status, 
+                        customer_code, customer_name, priority, notes)
                         VALUES
                         (:order_id, :product_id, :order_date, :delivery_date,
-                         :order_quantity, 0, '未出荷',
-                         :customer_code, :customer_name, 5, :notes)
+                        :order_quantity, 0, '未出荷',
+                        :customer_code, :customer_name, 5, :notes)
                     """), {
                         'order_id': order_id,
                         'product_id': representative_product_id,
