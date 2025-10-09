@@ -10,45 +10,25 @@ from .database_manager import DatabaseManager
 Base = declarative_base()
 
 class ProductORM(Base):
-    """製品テーブル - SQLAlchemy ORM"""
+    """製品テーブル - SQLAlchemy ORM（実テーブル構造に完全一致）"""
     __tablename__ = "products"
     
+    # ✅ 実際のテーブルに存在するカラムのみ定義
     id = Column(Integer, primary_key=True, autoincrement=True)
-    data_no = Column(Integer)
-    factory = Column(String(10))
-    client_code = Column(Integer)
-    calculation_date = Column(Date)
-    production_complete_date = Column(Date)
-    modified_factory = Column(String(10))
-    product_category = Column(String(10))
-    product_code = Column(String(20))
-    ac_code = Column(String(10))
-    processing_content = Column(String(100))
-    product_name = Column(String(100))
-    delivery_location = Column(String(50))
-    box_type = Column(String(10))
+    product_code = Column(String(50))
+    product_name = Column(String(200))
+    delivery_location = Column(String(100))
+    box_type = Column(String(20))
     capacity = Column(Integer)
-    grouping_category = Column(String(10))
-    form_category = Column(String(10))
-    inspection_category = Column(String(10))
-    ordering_category = Column(String(10))
-    regular_replenishment_category = Column(String(10))
-    lead_time = Column(Integer)
-    fixed_point_days = Column(Integer)
-    shipping_factory = Column(String(10))
-    client_product_code = Column(String(50))
-    purchasing_org = Column(String(10))
-    item_group = Column(String(10))
-    processing_type = Column(String(10))
-    inventory_transfer_category = Column(String(10))
-    created_at = Column(TIMESTAMP)
     container_width = Column(Integer)
     container_depth = Column(Integer)
     container_height = Column(Integer)
     stackable = Column(Integer)  # tinyint(1)
-    used_container_id = Column(Integer)
-    used_truck_ids = Column(String(100))  # ✅ 使用トラックID（カンマ区切り）
     can_advance = Column(Integer)  # tinyint(1)
+    used_container_id = Column(Integer)
+    used_truck_ids = Column(String(100))
+    created_at = Column(TIMESTAMP)
+    inspection_category = Column(String(10))
 
 
 class ProductionConstraintORM(Base):
@@ -171,21 +151,19 @@ class ProductRepository:
         session = self.db.get_session()
         try:
             product = ProductORM(
-                data_no=product_data.get("data_no"),
-                factory=product_data.get("factory"),
                 product_code=product_data.get("product_code"),
                 product_name=product_data.get("product_name"),
                 inspection_category=category,
                 capacity=product_data.get("capacity", 0),
-                lead_time=product_data.get("lead_time", 0),
-                fixed_point_days=product_data.get("fixed_point_days", 0),
                 container_width=product_data.get("container_width", 0),
                 container_depth=product_data.get("container_depth", 0),
                 container_height=product_data.get("container_height", 0),
                 stackable=int(product_data.get("stackable", False)),
                 used_container_id=product_data.get("used_container_id"),
-                used_truck_ids=product_data.get("used_truck_ids"),  # ✅ トラックID
-                can_advance=int(product_data.get("can_advance", False))
+                used_truck_ids=product_data.get("used_truck_ids"),
+                can_advance=int(product_data.get("can_advance", False)),
+                delivery_location=product_data.get("delivery_location"),
+                box_type=product_data.get("box_type")
             )
             session.add(product)
             session.commit()
@@ -196,20 +174,17 @@ class ProductRepository:
             return False
         finally:
             session.close()
-    
+
     def update_product(self, product_id: int, update_data: dict) -> bool:
-        """製品を更新 - デバッグログ付き完全版"""
+        """製品を更新 - 修正版"""
         session = self.db.get_session()
         try:
-            # ✅ デバッグログ
-            print(f"\n🔍 === update_product 開始 ===")
-            print(f"  product_id: {product_id}")
-            print(f"  update_data: {update_data}")
+            print(f"🔍 update_product: ID={product_id}, data={update_data}")
             
             product = session.get(ProductORM, product_id)
             
             if product:
-                print(f"  ✅ 製品見つかりました: {product.product_code}")
+                print(f"✅ 製品見つかりました: {product.product_code}")
                 
                 for key, value in update_data.items():
                     if hasattr(product, key):
@@ -217,35 +192,29 @@ class ProductRepository:
                         if key in ['stackable', 'can_advance'] and isinstance(value, bool):
                             value = int(value)
                         
-                        # ✅ 更新前の値を記録
                         old_value = getattr(product, key, None)
-                        print(f"  📝 更新: {key}")
-                        print(f"     旧: {old_value}")
-                        print(f"     新: {value}")
+                        print(f"📝 更新: {key}: {old_value} → {value}")
                         
                         setattr(product, key, value)
                     else:
-                        print(f"  ⚠️ 警告: カラム '{key}' は ProductORM に存在しません")
+                        print(f"⚠️ 警告: カラム '{key}' は ProductORM に存在しません")
                 
-                # ✅ コミット前の確認
-                print(f"  💾 コミット実行中...")
+                print(f"💾 コミット実行中...")
                 session.commit()
-                print(f"  ✅ コミット成功")
+                print(f"✅ コミット成功")
                 
-                # ✅ コミット後の値を確認
+                # コミット後の値を確認
                 session.refresh(product)
-                print(f"  🔍 コミット後の used_truck_ids: {product.used_truck_ids}")
-                print(f"=== update_product 完了 ===\n")
+                print(f"🔍 コミット後の used_container_id: {product.used_container_id}")
                 
                 return True
             else:
-                print(f"  ❌ エラー: product_id={product_id} が見つかりません")
+                print(f"❌ エラー: product_id={product_id} が見つかりません")
                 return False
                 
         except SQLAlchemyError as e:
             session.rollback()
-            print(f"\n❌ === update_product エラー ===")
-            print(f"  エラー内容: {e}")
+            print(f"❌ update_product エラー: {e}")
             import traceback
             traceback.print_exc()
             return False

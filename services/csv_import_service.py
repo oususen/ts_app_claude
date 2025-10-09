@@ -363,10 +363,11 @@ class CSVImportService:
                 """), {'order_id': order_id}).fetchone()
                 
                 if existing:
-                    # ✅ 既存レコードがあれば数量を加算
+                    # ✅ 既存レコードがあれば数量を加算or更新
                     existing_id = existing[0]
                     existing_quantity = existing[1]
-                    new_quantity = existing_quantity + total_quantity
+                    #new_quantity = existing_quantity + total_quantity  加算の場合
+                    new_quantity =  total_quantity
                     
                     session.execute(text("""
                         UPDATE delivery_progress

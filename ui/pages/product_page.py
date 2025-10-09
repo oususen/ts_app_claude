@@ -45,19 +45,31 @@ class ProductPage:
             truck_map = dict(zip(trucks_df['id'], trucks_df['name'])) if not trucks_df.empty else {}
             truck_name_to_id = dict(zip(trucks_df['name'], trucks_df['id'])) if not trucks_df.empty else {}
             
-            # DataFrame作成
-            products_df = pd.DataFrame([{
-                'ID': p.id,
-                '製品コード': p.product_code or '',
-                '製品名': p.product_name or '',
-                '使用容器': container_map.get(p.used_container_id, '未設定') if p.used_container_id else '未設定',
-                '入り数': int(p.capacity or 0),
-                '検査区分': p.inspection_category or 'N',
-                'リードタイム': int(p.lead_time or 0),
-                '固定日数': int(p.fixed_point_days or 0),
-                '前倒可': bool(getattr(p, 'can_advance', False)),
-                '使用トラック': ', '.join(self._get_truck_names_by_ids(getattr(p, 'used_truck_ids', None))) or '未設定'
-            } for p in products])
+            # DataFrame作成 - デフォルト値の設定を強化
+            products_data = []
+            for p in products:
+                # 容器IDの取得（様々な属性名に対応）
+                used_container_id = getattr(p, 'used_container_id', None) or getattr(p, 'container_id', None)
+                
+                # トラックIDの取得（様々な属性名に対応）
+                used_truck_ids = getattr(p, 'used_truck_ids', None) or getattr(p, 'truck_ids', None)
+                
+                # その他の属性も同様に取得
+                product_data = {
+                    'ID': p.id,
+                    '製品コード': getattr(p, 'product_code', '') or '',
+                    '製品名': getattr(p, 'product_name', '') or '',
+                    '使用容器': container_map.get(used_container_id, '未設定') if used_container_id else '未設定',
+                    '入り数': int(getattr(p, 'capacity', 0) or 0),
+                    '検査区分': getattr(p, 'inspection_category', 'N') or 'N',
+                    'リードタイム': int(getattr(p, 'lead_time', 0) or 0),
+                    '固定日数': int(getattr(p, 'fixed_point_days', 0) or 0),
+                    '前倒可': bool(getattr(p, 'can_advance', False)),
+                    '使用トラック': ', '.join(self._get_truck_names_by_ids(used_truck_ids)) or '未設定'
+                }
+                products_data.append(product_data)
+            
+            products_df = pd.DataFrame(products_data)
             
             # サマリー
             st.subheader("📋 製品統計")
@@ -216,23 +228,14 @@ class ProductPage:
             if bool(edited_row['前倒可']) != bool(original_row['前倒可']):
                 update_data['can_advance'] = bool(edited_row['前倒可'])
             
-            # 使用トラック
-            if edited_row['使用トラック'] != original_row['使用トラック']:
-                truck_names = [name.strip() for name in edited_row['使用トラック'].split(',') if name.strip() and name.strip() != '未設定']
-                if truck_names:
-                    truck_ids = [truck_name_to_id.get(name) for name in truck_names if name in truck_name_to_id]
-                    update_data['used_truck_ids'] = ','.join(map(str, truck_ids)) if truck_ids else None
-                else:
-                    update_data['used_truck_ids'] = None
-            
             # 変更があれば保存
             if update_data:
                 success = self.production_service.update_product(product_id, update_data)
                 if success:
                     changes_made = True
-                    print(f"✅ 製品ID={product_id} を更新しました")
+                    st.toast(f"✅ 製品ID={product_id} を更新しました")
                 else:
-                    print(f"❌ 製品ID={product_id} の更新に失敗")
+                    st.toast(f"❌ 製品ID={product_id} の更新に失敗")
         
         return changes_made
     
@@ -240,7 +243,7 @@ class ProductPage:
         """個別製品の詳細編集・削除（トラック複数選択対応）"""
         
         with st.container(border=True):
-            st.write(f"**製品詳細編集: {product.product_code}**")
+            st.write(f"**製品詳細編集: {getattr(product, 'product_code', 'N/A')}**")
             
             # 現在の情報表示
             col_info1, col_info2, col_info3 = st.columns(3)
@@ -248,19 +251,20 @@ class ProductPage:
             with col_info1:
                 st.write("**基本情報**")
                 st.write(f"ID: {product.id}")
-                st.write(f"製品コード: {product.product_code or '-'}")
-                st.write(f"製品名: {product.product_name or '-'}")
-                st.write(f"入り数: {product.capacity or 0}")
+                st.write(f"製品コード: {getattr(product, 'product_code', '-')}")
+                st.write(f"製品名: {getattr(product, 'product_name', '-')}")
+                st.write(f"入り数: {getattr(product, 'capacity', 0)}")
             
             with col_info2:
                 st.write("**容器情報**")
-                st.write(f"使用容器: {container_map.get(product.used_container_id, '未設定') if product.used_container_id else '未設定'}")
-                st.write(f"検査区分: {product.inspection_category or 'N'}")
+                used_container_id = getattr(product, 'used_container_id', None) or getattr(product, 'container_id', None)
+                st.write(f"使用容器: {container_map.get(used_container_id, '未設定') if used_container_id else '未設定'}")
+                st.write(f"検査区分: {getattr(product, 'inspection_category', 'N')}")
             
             with col_info3:
                 st.write("**納期・制約**")
-                st.write(f"リードタイム: {product.lead_time or 0} 日")
-                st.write(f"固定日数: {product.fixed_point_days or 0} 日")
+                st.write(f"リードタイム: {getattr(product, 'lead_time', 0)} 日")
+                st.write(f"固定日数: {getattr(product, 'fixed_point_days', 0)} 日")
                 st.write(f"前倒可: {'✅' if getattr(product, 'can_advance', False) else '❌'}")
             
             st.markdown("---")
@@ -272,10 +276,14 @@ class ProductPage:
                 # 使用トラック選択（複数選択）
                 if not trucks_df.empty:
                     truck_options = dict(zip(trucks_df['name'], trucks_df['id']))
+                    
+                    # 現在のトラックIDを取得（様々な属性名に対応）
                     current_truck_ids = []
-                    if hasattr(product, 'used_truck_ids') and product.used_truck_ids:
+                    used_truck_ids = getattr(product, 'used_truck_ids', None) or getattr(product, 'truck_ids', None)
+                    
+                    if used_truck_ids:
                         try:
-                            current_truck_ids = [int(tid.strip()) for tid in str(product.used_truck_ids).split(',')]
+                            current_truck_ids = [int(tid.strip()) for tid in str(used_truck_ids).split(',')]
                         except:
                             current_truck_ids = []
                     
@@ -321,8 +329,7 @@ class ProductPage:
                     
                     success = self.production_service.update_product(product.id, update_data)
                     if success:
-                        st.success(f"✅ 製品 '{product.product_code}' のトラック設定を更新しました")
-                        st.balloons()
+                        st.success(f"✅ 製品 '{getattr(product, 'product_code', 'N/A')}' のトラック設定を更新しました")
                         st.rerun()
                     else:
                         st.error("❌ トラック設定の更新に失敗しました")
@@ -336,7 +343,7 @@ class ProductPage:
                     if st.session_state.get(f"confirm_delete_{product.id}", False):
                         success = self.production_service.delete_product(product.id)
                         if success:
-                            st.success(f"製品 '{product.product_code}' を削除しました")
+                            st.success(f"製品 '{getattr(product, 'product_code', 'N/A')}' を削除しました")
                             # 確認フラグをリセット
                             st.session_state[f"confirm_delete_{product.id}"] = False
                             st.rerun()
@@ -349,11 +356,6 @@ class ProductPage:
             with col_del2:
                 if st.session_state.get(f"confirm_delete_{product.id}", False):
                     st.error("⚠️ 削除確認中 - もう一度「削除」ボタンをクリックしてください")
-    
-    def _show_product_detail_editor(self, product, containers, trucks_df, container_map):
-        """個別製品の詳細編集・削除（旧版・互換性用）"""
-        # 新版を呼び出す
-        self._show_product_detail_editor_with_truck_select(product, containers, trucks_df, container_map)
     
     def _get_truck_names_by_ids(self, truck_ids_str):
         """トラックIDの文字列からトラック名のリストを取得"""
@@ -382,7 +384,6 @@ class ProductPage:
                 success = self.production_service.create_product(product_data)
                 if success:
                     st.success(f"製品 '{product_data['product_name']}' を登録しました")
-                    st.balloons()
                     st.rerun()
                 else:
                     st.error("製品登録に失敗しました")

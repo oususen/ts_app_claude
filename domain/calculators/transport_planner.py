@@ -95,7 +95,23 @@ class TransportPlanner:
         
         for _, order in orders_df.iterrows():
             product_id = int(order['product_id'])
+            
+            # ✅ delivery_date の型変換を確実に行う
             delivery_date = order.get('delivery_date') or order.get('instruction_date')
+            if delivery_date:
+                # 文字列の場合、datetime/dateに変換
+                if isinstance(delivery_date, str):
+                    try:
+                        delivery_date = datetime.strptime(delivery_date, '%Y-%m-%d').date()
+                    except:
+                        try:
+                            delivery_date = datetime.strptime(delivery_date, '%Y/%m/%d').date()
+                        except:
+                            continue
+                # datetimeの場合、dateに変換
+                elif hasattr(delivery_date, 'date'):
+                    delivery_date = delivery_date.date()
+            
             quantity = int(order.get('order_quantity') or order.get('instruction_quantity', 0))
             
             if not delivery_date or quantity <= 0 or product_id not in product_map:
