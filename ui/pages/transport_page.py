@@ -191,14 +191,20 @@ class TransportPage:
             )
         
         with col2:
-            days = st.number_input(
-                "計画日数",
-                min_value=1,
-                max_value=30,
-                value=7,
-                help="積載計画を作成する日数"
+            # ✅ 修正: 計画日数 → 計画終了日
+            end_date = st.date_input(
+                "計画終了日",
+                value=date.today() + timedelta(days=10),  # デフォルト: 10日後
+                min_value=start_date,
+                help="積載計画の終了日を指定してください"
             )
         
+        # ✅ 日数を自動計算
+        days = (end_date - start_date).days + 1
+        
+        # 計画日数の表示
+        st.info(f"📅 計画期間: **{days}日間** ({start_date.strftime('%Y年%m月%d日')} ～ {end_date.strftime('%Y年%m月%d日')})")
+   
         st.markdown("---")
         
         if st.button("🔄 積載計画を作成", type="primary", use_container_width=True):

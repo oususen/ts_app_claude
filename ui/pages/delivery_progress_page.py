@@ -393,6 +393,7 @@ class DeliveryProgressPage:
             planned_row = {'製品コード': '', '状態': '納入計画数', 'row_type': 'planned'}
             shipped_row = {'製品コード': '', '状態': '納入実績', 'row_type': 'shipped'}
             progress_row = {'製品コード': '', '状態': '進度', 'row_type': 'progress'}
+            keisen_row = {'製品コード': '', '状態': '___', 'row_type': 'ーーー'}
             
             cumulative_order = 0
             cumulative_planned = 0
@@ -435,7 +436,7 @@ class DeliveryProgressPage:
                 progress = cumulative_shipped - cumulative_order
                 progress_row[date_str] = int(progress)
             
-            result_rows.extend([order_row, planned_row, shipped_row, progress_row])
+            result_rows.extend([order_row, planned_row, shipped_row, progress_row, keisen_row])
         
         # DataFrameに変換
         result_df = pd.DataFrame(result_rows)
