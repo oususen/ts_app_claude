@@ -180,14 +180,24 @@ class TransportPage:
         - 前倒し可能な製品のみが平準化の対象となります
         """)
         
+        # 納期データから推奨期間を取得
+        try:
+            orders_df = self.service.get_delivery_progress()
+            if not orders_df.empty and 'delivery_date' in orders_df.columns:
+                min_delivery = pd.to_datetime(orders_df['delivery_date']).min().date()
+                max_delivery = pd.to_datetime(orders_df['delivery_date']).max().date()
+                st.info(f"💡 納期データの範囲: {min_delivery} ～ {max_delivery}")
+        except Exception as e:
+            pass
+        
         col1, col2 = st.columns(2)
         
         with col1:
             start_date = st.date_input(
                 "計画開始日",
-                value=date.today() + timedelta(days=3),
+                value=date.today(),
                 min_value=date.today(),
-                help="通常は3稼働日後から開始"
+                help="積載計画の開始日（納期の最も早い日付を含めてください）"
             )
         
         with col2:
@@ -473,6 +483,21 @@ class TransportPage:
                                     use_container_width=True,
                                     key=f"pdf_both_{plan_data.get('id', 'current')}"
                                 )
+
+            # 削除ボタン
+            st.markdown("---")
+            st.subheader("🗑️ 計画の削除")
+            
+            col_delete1, col_delete2 = st.columns([3, 1])
+            
+            with col_delete1:
+                st.warning(f"⚠️ 計画「{plan_data.get('plan_name', '無題')}」を削除しますか？この操作は取り消せません。")
+            
+            with col_delete2:
+                if st.button("🗑️ 削除", type="secondary", use_container_width=True, key=f"delete_{plan_data.get('id')}"):
+                    if self._confirm_and_delete_plan(plan_data.get('id'), plan_data.get('plan_name', '無題')):
+                        st.success("✅ 計画を削除しました")
+                        st.rerun()
             
             st.markdown("---")
             
@@ -956,9 +981,27 @@ class TransportPage:
                 daily_plans = plan_data.get('daily_plans', {})
                 if daily_plans:
                     plan_data_list = []
+                    prev_date = None
                     
                     for date_str in sorted(daily_plans.keys()):
                         day_plan = daily_plans[date_str]
+                        
+                        # 日付が変わったら空白行を挿入
+                        if prev_date is not None and prev_date != date_str:
+                            plan_data_list.append({
+                                '積載日': '',
+                                'トラック名': '',
+                                '製品コード': '',
+                                '製品名': '',
+                                '容器数': '',
+                                '合計数量': '',
+                                '納期': '',
+                                '体積積載率(%)': '',
+                                '重量積載率(%)': '',
+                                '前倒し配送': ''
+                            })
+                        
+                        prev_date = date_str
                         
                         for truck in day_plan.get('trucks', []):
                             truck_name = truck.get('truck_name', '不明')
@@ -1438,3 +1481,18 @@ class TransportPage:
             
         except Exception as e:
             st.warning(f"納入進度更新エラー: {e}")
+    def _confirm_and_delete_plan(self, plan_id: int, plan_name: str) -> bool:
+        """計画削除の確認と実行"""
+        try:
+            # 削除実行
+            success = self.service.delete_loading_plan(plan_id)
+            
+            if success:
+                return True
+            else:
+                st.error("❌ 削除に失敗しました")
+                return False
+                
+        except Exception as e:
+            st.error(f"削除エラー: {e}")
+            return False

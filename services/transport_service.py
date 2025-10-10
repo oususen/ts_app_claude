@@ -225,9 +225,26 @@ class TransportService:
         """日別計画をExcelシートに出力"""
         
         daily_data = []
+        prev_date = None
         
         for date_str in sorted(plan_result['daily_plans'].keys()):
             plan = plan_result['daily_plans'][date_str]
+            
+            # 日付が変わったら空白行を挿入
+            if prev_date is not None and prev_date != date_str:
+                daily_data.append({
+                    '積載日': '',
+                    'トラック名': '',
+                    '製品コード': '',
+                    '製品名': '',
+                    '容器数': '',
+                    '合計数量': '',
+                    '納期': '',
+                    '体積積載率': '',
+                    '重量積載率': ''
+                })
+            
+            prev_date = date_str
             
             for truck in plan.get('trucks', []):
                 truck_name = truck.get('truck_name', '不明なトラック')
@@ -235,6 +252,10 @@ class TransportService:
             
                 print(f"🔍 デバッグ: {date_str} - truck_id={truck_id}, truck_name={truck_name}")
                 for item in truck.get('loaded_items', []):
+                    # 前倒しフラグを取得
+                    is_advanced = item.get('is_advanced', False)
+                    advanced_mark = '○' if is_advanced else '×'
+                    
                     daily_data.append({
                         '積載日': date_str,
                         'トラック名': truck['truck_name'],
@@ -243,8 +264,9 @@ class TransportService:
                         '容器数': item.get('num_containers', 0),
                         '合計数量': item.get('total_quantity', 0),
                         '納期': item['delivery_date'].strftime('%Y-%m-%d') if 'delivery_date' in item else '',
-                        '体積積載率': f"{truck['utilization']['volume_rate']}%",
-                        '重量積載率': f"{truck['utilization']['weight_rate']}%"
+                        '体積積載率(%)': truck['utilization']['volume_rate'],
+                        '重量積載率(%)': truck['utilization']['weight_rate'],
+                        '前倒し配送': advanced_mark
                     })
         
         if daily_data:
@@ -270,6 +292,10 @@ class TransportService:
             
             for truck in plan.get('trucks', []):
                 for item in truck.get('loaded_items', []):
+                    # 前倒しフラグを取得
+                    is_advanced = item.get('is_advanced', False)
+                    advanced_mark = '○' if is_advanced else '×'
+                    
                     weekly_data[week_key].append({
                         '週': week_key,
                         '積載日': date_str,
@@ -277,7 +303,9 @@ class TransportService:
                         '製品コード': item.get('product_code', ''),
                         '製品名': item.get('product_name', ''),
                         '容器数': item.get('num_containers', 0),
-                        '合計数量': item.get('total_quantity', 0)
+                        '合計数量': item.get('total_quantity', 0),
+                        '納期': item['delivery_date'].strftime('%Y-%m-%d') if 'delivery_date' in item else '',
+                        '前倒し配送': advanced_mark
                     })
         
         for week_key, items in weekly_data.items():
@@ -296,6 +324,10 @@ class TransportService:
             
             for truck in plan.get('trucks', []):
                 for item in truck.get('loaded_items', []):
+                    # 前倒しフラグを取得
+                    is_advanced = item.get('is_advanced', False)
+                    advanced_mark = '○' if is_advanced else '×'
+                    
                     daily_data.append({
                         '積載日': date_str,
                         'トラック名': truck['truck_name'],
@@ -304,13 +336,32 @@ class TransportService:
                         '容器数': item.get('num_containers', 0),
                         '合計数量': item.get('total_quantity', 0),
                         '納期': item['delivery_date'].strftime('%Y-%m-%d') if 'delivery_date' in item else '',
-                        '体積積載率': truck['utilization']['volume_rate'],
-                        '重量積載率': truck['utilization']['weight_rate']
+                        '体積積載率(%)': truck['utilization']['volume_rate'],
+                        '重量積載率(%)': truck['utilization']['weight_rate'],
+                        '前倒し配送': advanced_mark
                     })
+        
+        # 警告情報も追加
+        warning_data = []
+        for date_str in sorted(plan_result['daily_plans'].keys()):
+            plan = plan_result['daily_plans'][date_str]
+            for warning in plan.get('warnings', []):
+                warning_data.append({
+                    '日付': date_str,
+                    '警告内容': warning
+                })
         
         if daily_data:
             df = pd.DataFrame(daily_data)
-            return df.to_csv(index=False, encoding='utf-8-sig')
+            csv_output = df.to_csv(index=False, encoding='utf-8-sig')
+            
+            # 警告がある場合は追加
+            if warning_data:
+                csv_output += '\n\n'
+                warning_df = pd.DataFrame(warning_data)
+                csv_output += warning_df.to_csv(index=False, encoding='utf-8-sig')
+            
+            return csv_output
         else:
             return ""
     def update_loading_plan(self, plan_id: int, updates: List[Dict]) -> bool:
