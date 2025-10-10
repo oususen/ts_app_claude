@@ -90,7 +90,9 @@ class TransportRepository:
                 "departure_time": t.departure_time,
                 "arrival_time": t.arrival_time,
                 "default_use": t.default_use,
-                "arrival_day_offset": t.arrival_day_offset
+                "arrival_day_offset": t.arrival_day_offset,
+                # 追加：優先積載製品コードを含める
+                "priority_product_codes": t.priority_product_codes
             } for t in trucks])
         except SQLAlchemyError as e:
             print(f"truck_masterテーブル取得エラー: {e}")
@@ -131,6 +133,8 @@ class TransportRepository:
                 arrival_time=arr_time,
                 default_use=truck_data.get("default_use", False),
                 arrival_day_offset=offset,
+                # 新規追加：優先積載製品コード
+                priority_product_codes=truck_data.get("priority_product_codes")
             )
             session.add(truck)
             session.commit()

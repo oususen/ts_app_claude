@@ -541,3 +541,4 @@ class TransportPlanner:
             'unloaded_count': len(unloaded_tasks),
             'status': '正常' if not unloaded_tasks else '警告あり'
         }
+    

@@ -43,7 +43,7 @@ class Truck(Base):
     arrival_time = Column(Time, nullable=False)
     default_use = Column(Boolean, default=False)
     arrival_day_offset = Column(Integer, default=0)
-
+    priority_product_codes = Column(String(255),nullable=True)
     def __repr__(self):
         return f"<Truck(id={self.id}, name='{self.name}', departure={self.departure_time}, arrival={self.arrival_time}, offset={self.arrival_day_offset})>"
 

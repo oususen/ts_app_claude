@@ -54,7 +54,7 @@ class CSVImportPage:
                 uploaded_file.seek(0)
                 
                 st.subheader("📋 プレビュー（先頭10行）")
-                st.dataframe(df_preview, use_container_width=True)
+                st.dataframe(df_preview, use_container_width=True, height=200)
                 
                 # レコード識別の確認
                 v2_count = len(df_preview[df_preview['レコード識別'] == 'V2'])

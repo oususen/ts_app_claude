@@ -1128,8 +1128,7 @@ class TransportPage:
         
         if all_items:
             df = pd.DataFrame(all_items)
-            st.dataframe(df, use_container_width=True, hide_index=True)
-        else:
+            st.dataframe(df, width='stretch')
             st.info("表示するデータがありません")
 
     def _show_container_management(self):
@@ -1266,7 +1265,7 @@ class TransportPage:
                             st.write(f"**出発時刻:** {truck['departure_time']}")
                             st.write(f"**到着時刻:** {truck['arrival_time']} (+{truck['arrival_day_offset']}日)")
                             st.write(f"**デフォルト便:** {'✅' if truck['default_use'] else '❌'}")
-
+                            st.write(f"**優先積載製品:** {truck['priority_product_codes'] or 'なし'}")  # 新規表示
                         with st.form(f"edit_truck_form_{truck['id']}"):
                             st.write("✏️ トラック情報を編集")
 
@@ -1289,7 +1288,12 @@ class TransportPage:
                                     value=int(truck['arrival_day_offset'])
                                 )
                                 new_default = st.checkbox("デフォルト便", value=bool(truck['default_use']))
-
+                                # 追加：優先積載製品コード入力欄
+                                new_priority = st.text_input(
+                                    "優先積載製品コード（カンマ区切り）",
+                                    value=truck.get('priority_product_codes', '') or '',
+                                    placeholder="例: PRD001,PRD002"
+                                )
                             submitted = st.form_submit_button("更新", type="primary")
                             if submitted:
                                 update_data = {
@@ -1302,6 +1306,9 @@ class TransportPage:
                                     "arrival_time": new_arr,
                                     "arrival_day_offset": new_offset,
                                     "default_use": new_default,
+                                    # 新規追加：優先積載製品コード
+                                    "priority_product_codes": new_priority.strip() if new_priority else None
+    
                                 }
                                 success = self.service.update_truck(truck['id'], update_data)
                                 if success:

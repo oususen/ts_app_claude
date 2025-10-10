@@ -46,6 +46,7 @@ class ProductionPlanningApp:
             layout=APP_CONFIG.layout
         )
         
+        
         # サイドバー表示
         selected_page = create_sidebar()
         

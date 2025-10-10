@@ -110,6 +110,11 @@ class FormComponents:
                 arrival_day_offset = st.selectbox("到着日", options=[0, 1], format_func=lambda x: "当日" if x == 0 else "翌日")
                 arr_time_str = arrival_time.strftime('%H:%M:%S') if arrival_time else "12:00:00"
                 default_use = st.checkbox("デフォルト便", value=False)
+                # 追加：優先積載製品コード入力欄
+                priority_input = st.text_input(
+                    "優先積載製品コード（カンマ区切り）",
+                    placeholder="例: PRD001,PRD002"
+                )
             
             submitted = st.form_submit_button("トラック登録")
             
@@ -126,7 +131,10 @@ class FormComponents:
                     'max_weight': max_weight,
                     'departure_time': dep_time.strftime('%H:%M:%S') if hasattr(dep_time, 'strftime') else dep_time,
                     'arrival_time': arr_time.strftime('%H:%M:%S') if hasattr(arr_time, 'strftime') else arr_time,
-                    'default_use': default_use
+                    'default_use': default_use,
+                     # 新規追加：優先積載製品コードを返す（空欄ならNone）
+                    'priority_product_codes': priority_input.strip() if priority_input else None
+            
                 }
         
         return None    
