@@ -131,25 +131,34 @@ class TransportPlanner:
             use_non_default
         )
         
+        # まとめ対象日付を実際の計画日で絞り込み
+        planned_dates = [
+            date for date in working_dates
+            if date.strftime('%Y-%m-%d') in daily_plans and daily_plans[date.strftime('%Y-%m-%d')]['trucks']
+        ]
+        if not planned_dates:
+            planned_dates = working_dates
+        
         # Step7: 最終日の積み残しに特別フラグを設定
-        if len(working_dates) > 0:
-            final_date_str = working_dates[-1].strftime('%Y-%m-%d')
-            if final_date_str in daily_plans:
-                final_plan = daily_plans[final_date_str]
-                if final_plan.get('remaining_demands'):
-                    # 最終日の積み残しに特別フラグを設定
-                    for demand in final_plan['remaining_demands']:
-                        demand['final_day_overflow'] = True
+        final_date_str = planned_dates[-1].strftime('%Y-%m-%d') if planned_dates else None
+        if final_date_str and final_date_str in daily_plans:
+            final_plan = daily_plans[final_date_str]
+            if final_plan.get('remaining_demands'):
+                for demand in final_plan['remaining_demands']:
+                    demand['final_day_overflow'] = True
         
         # サマリー作成
-        summary = self._create_summary(daily_plans, use_non_default)
+        summary = self._create_summary(daily_plans, use_non_default, planned_dates)
+        
+        period_start = planned_dates[0] if planned_dates else working_dates[0]
+        period_end = planned_dates[-1] if planned_dates else working_dates[-1]
         
         return {
             'daily_plans': daily_plans,
             'summary': summary,
             'unloaded_tasks': [],  # 互換性のため
-            'period': f"{working_dates[0].strftime('%Y-%m-%d')} ~ {working_dates[-1].strftime('%Y-%m-%d')}",
-            'working_dates': [d.strftime('%Y-%m-%d') for d in working_dates],
+            'period': f"{period_start.strftime('%Y-%m-%d')} ~ {period_end.strftime('%Y-%m-%d')}",
+            'working_dates': [d.strftime('%Y-%m-%d') for d in planned_dates],
             'use_non_default_truck': use_non_default
         }
     
@@ -570,6 +579,8 @@ class TransportPlanner:
         sorted_demands = self._sort_demands_by_priority(demands, truck_states)
         
         # 各製品を適切なトラックに積載
+        low_utilization_threshold = 0.7
+        deferred_for_fallback = []
         for demand in sorted_demands:
             loaded = False
             
@@ -751,8 +762,88 @@ class TransportPlanner:
                                 break
                 
             if not loaded and remaining_demand['num_containers'] > 0:
-                print(f"      ⚠️ {demand['product_code']}: 積み残し {remaining_demand['num_containers']}容器")
-                remaining_demands.append(remaining_demand)
+                fallback_candidates = [
+                    state for state in truck_states.values()
+                    if state['total_floor_area'] > 0 and
+                    (1 - state['remaining_floor_area'] / state['total_floor_area']) < low_utilization_threshold
+                ]
+                fallback_candidates.sort(key=lambda s: s['remaining_floor_area'], reverse=True)
+
+                for truck_state in fallback_candidates:
+                    if remaining_demand['num_containers'] <= 0:
+                        break
+
+                    candidate_container = container_map.get(remaining_demand['container_id'])
+                    if not candidate_container:
+                        continue
+
+                    floor_area_per_container = (candidate_container.width * candidate_container.depth) / 1_000_000
+                    if floor_area_per_container <= 0:
+                        continue
+
+                    max_stack = getattr(candidate_container, 'max_stack', 1)
+                    stackable = getattr(candidate_container, 'stackable', False)
+                    available_area = truck_state['remaining_floor_area']
+
+                    if available_area <= 0:
+                        continue
+
+                    if stackable and max_stack > 1:
+                        nominal_slots = int(available_area / floor_area_per_container)
+                        loadable_containers = nominal_slots * max_stack
+                        stacked = (loadable_containers + max_stack - 1) // max_stack if loadable_containers > 0 else 0
+                        loadable_floor_area = floor_area_per_container * stacked
+                    else:
+                        loadable_containers = int(available_area / floor_area_per_container)
+                        loadable_floor_area = loadable_containers * floor_area_per_container
+
+                    if loadable_containers <= 0:
+                        continue
+
+                    loadable_containers = min(loadable_containers, remaining_demand['num_containers'])
+                    capacity = remaining_demand.get('capacity', 1)
+                    loadable_quantity = loadable_containers * capacity
+
+                    if stackable and max_stack > 1:
+                        stacked = (loadable_containers + max_stack - 1) // max_stack
+                        loadable_floor_area = floor_area_per_container * stacked
+                    else:
+                        loadable_floor_area = floor_area_per_container * loadable_containers
+
+                    fallback_item = {
+                        'product_id': remaining_demand['product_id'],
+                        'product_code': remaining_demand['product_code'],
+                        'product_name': remaining_demand.get('product_name', ''),
+                        'container_id': remaining_demand['container_id'],
+                        'container_name': candidate_container.name,
+                        'num_containers': loadable_containers,
+                        'total_quantity': loadable_quantity,
+                        'floor_area': loadable_floor_area,
+                        'floor_area_per_container': floor_area_per_container,
+                        'delivery_date': remaining_demand['delivery_date'],
+                        'loading_date': remaining_demand.get('loading_date'),
+                        'capacity': capacity,
+                        'can_advance': remaining_demand.get('can_advance', False),
+                        'is_advanced': remaining_demand.get('is_advanced', False),
+                        'truck_loading_dates': remaining_demand.get('truck_loading_dates', {}),
+                        'truck_ids': remaining_demand.get('truck_ids', []),
+                        'stackable': stackable,
+                        'max_stack': max_stack
+                    }
+
+                    truck_state['loaded_items'].append(fallback_item)
+                    truck_state['remaining_floor_area'] -= loadable_floor_area
+                    truck_state['loaded_container_ids'].add(remaining_demand['container_id'])
+
+                    remaining_demand['num_containers'] -= loadable_containers
+                    remaining_demand['total_quantity'] -= loadable_quantity
+                    remaining_demand['floor_area'] -= loadable_floor_area
+
+                    loaded = True
+
+                if remaining_demand['num_containers'] > 0:
+                    print(f"      ⚠️ {demand['product_code']}: 積み残し {remaining_demand['num_containers']}容器")
+                    remaining_demands.append(remaining_demand)
         
         # トラックプランを作成（積載があるトラックのみ）
         final_truck_plans = []
@@ -905,10 +996,20 @@ class TransportPlanner:
             else:
                 same_container_flag = 1
             
-            # 4. 空き容量（大きい方が優先なので負数）
-            remaining_area = -truck_state['remaining_floor_area']
+            # 4. 空き容量（大きい方が優先）
+            remaining_area = truck_state['remaining_floor_area']
             
-            return (truck_priority_index, priority_product_flag, same_container_flag, remaining_area)
+            # 5. 現在の利用率（低い方を優先）
+            utilized_area = truck_state['total_floor_area'] - truck_state['remaining_floor_area']
+            utilization_rate = utilized_area / truck_state['total_floor_area'] if truck_state['total_floor_area'] else 0
+            
+            return (
+                truck_priority_index,
+                priority_product_flag,
+                same_container_flag,
+                -remaining_area,
+                utilization_rate
+            )
         
         sorted_trucks = sorted(candidate_trucks, key=get_truck_priority)
         
@@ -1446,13 +1547,17 @@ class TransportPlanner:
                         relocated = True
                         break
     
-    def _create_summary(self, daily_plans, use_non_default) -> Dict:
+    def _create_summary(self, daily_plans, use_non_default, planned_dates=None) -> Dict:
         """サマリー作成"""
-        total_trips = sum(plan['total_trips'] for plan in daily_plans.values())
-        total_warnings = sum(len(plan['warnings']) for plan in daily_plans.values())
+        if planned_dates is None:
+            planned_keys = daily_plans.keys()
+        else:
+            planned_keys = [date.strftime('%Y-%m-%d') for date in planned_dates]
+        total_trips = sum(daily_plans[key]['total_trips'] for key in planned_keys if key in daily_plans)
+        total_warnings = sum(len(daily_plans[key]['warnings']) for key in planned_keys if key in daily_plans)
         
         return {
-            'total_days': len(daily_plans),
+            'total_days': len(planned_keys),
             'total_trips': total_trips,
             'total_warnings': total_warnings,
             'unloaded_count': 0,  # 互換性のため
