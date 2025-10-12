@@ -129,11 +129,13 @@ class TransportService:
             truck_container_rules=truck_container_rules,
             start_date=start_date,
             days=days,
-            calendar_repo=self.calendar_repo if use_calendar else None  # ✅ カレンダー渡す
+            calendar_repo=self.calendar_repo if use_calendar else None  # カレンダー渡す
         )
-        
+
+        result['unplanned_orders'] = self._find_unplanned_orders(orders_df, result)
+
         return result
-    
+
     def save_loading_plan(self, plan_result: Dict[str, Any], plan_name: str = None) -> int:
         """積載計画をDBに保存"""
         return self.loading_plan_repo.save_loading_plan(plan_result, plan_name)
@@ -364,6 +366,84 @@ class TransportService:
             return csv_output
         else:
             return ""
+
+    def _find_unplanned_orders(self, orders_df: pd.DataFrame, plan_result: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """積載計画に含まれなかった受注を抽出"""
+        if orders_df is None or orders_df.empty:
+            return []
+        if 'delivery_date' not in orders_df.columns or 'product_id' not in orders_df.columns:
+            return []
+
+        quantity_col = None
+        for candidate in ['order_quantity', 'instruction_quantity']:
+            if candidate in orders_df.columns:
+                quantity_col = candidate
+                break
+        if quantity_col is None:
+            return []
+
+        orders = orders_df.copy()
+        orders['delivery_date'] = pd.to_datetime(orders['delivery_date']).dt.date
+        orders['product_id'] = pd.to_numeric(orders['product_id'], errors='coerce')
+        orders = orders.dropna(subset=['product_id', 'delivery_date'])
+        orders['product_id'] = orders['product_id'].astype(int)
+
+        planned_rows = []
+        for plan in plan_result.get('daily_plans', {}).values():
+            for truck in plan.get('trucks', []):
+                for item in truck.get('loaded_items', []):
+                    product_id = item.get('product_id')
+                    delivery_date = item.get('delivery_date')
+                    if product_id is None or delivery_date is None:
+                        continue
+                    if isinstance(delivery_date, datetime):
+                        delivery_date = delivery_date.date()
+                    planned_rows.append({
+                        'product_id': product_id,
+                        'delivery_date': delivery_date,
+                        'loaded_quantity': item.get('total_quantity', 0)
+                    })
+
+        if planned_rows:
+            planned_df = pd.DataFrame(planned_rows)
+            planned_df['delivery_date'] = pd.to_datetime(planned_df['delivery_date']).dt.date
+            planned_summary = (
+                planned_df.groupby(['product_id', 'delivery_date'])['loaded_quantity']
+                .sum()
+                .reset_index()
+            )
+            orders = orders.merge(planned_summary, how='left', on=['product_id', 'delivery_date'])
+        else:
+            orders['loaded_quantity'] = 0
+
+        if 'loaded_quantity' not in orders.columns:
+            orders['loaded_quantity'] = 0
+
+        orders['loaded_quantity'] = orders['loaded_quantity'].fillna(0)
+        orders['remaining_quantity'] = orders[quantity_col] - orders['loaded_quantity']
+
+        unplanned = orders[orders['remaining_quantity'] > 0].copy()
+        if unplanned.empty:
+            return []
+
+        column_order = []
+        for optional in ['order_id', 'instruction_id', 'product_code', 'product_name', 'customer_name']:
+            if optional in unplanned.columns:
+                column_order.append(optional)
+
+        required = ['product_id', 'delivery_date', quantity_col, 'loaded_quantity', 'remaining_quantity']
+        column_order.extend(required)
+        # 重複を削除しつつ順序を維持
+        seen = set()
+        ordered_columns = []
+        for col in column_order:
+            if col in unplanned.columns and col not in seen:
+                ordered_columns.append(col)
+                seen.add(col)
+
+        unplanned['delivery_date'] = pd.to_datetime(unplanned['delivery_date']).dt.strftime('%Y-%m-%d')
+        return unplanned[ordered_columns].to_dict('records')
+
     def update_loading_plan(self, plan_id: int, updates: List[Dict]) -> bool:
         """積載計画を更新"""
         try:

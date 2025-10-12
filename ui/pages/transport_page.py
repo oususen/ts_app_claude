@@ -242,6 +242,16 @@ class TransportPage:
                         status_color = "🟢" if summary['status'] == '正常' else "🟡"
                         st.metric("ステータス", f"{status_color} {summary['status']}")
                     
+                    unplanned_orders = result.get('unplanned_orders') or []
+                    if unplanned_orders:
+                        st.warning(f"⚠️ 受注されたが積載されていない製品が {len(unplanned_orders)} 件あります")
+                        unplanned_df = pd.DataFrame(unplanned_orders)
+                        st.dataframe(
+                            unplanned_df,
+                            width='stretch',
+                            hide_index=True
+                        )
+                    
                     if result['unloaded_tasks']:
                         st.error(f"⚠️ 積載できなかった製品: {len(result['unloaded_tasks'])}件")
                         
@@ -355,6 +365,17 @@ class TransportPage:
         
         result = st.session_state['loading_plan']
         daily_plans = result['daily_plans']
+        
+        unplanned_orders = result.get('unplanned_orders') or []
+        if unplanned_orders:
+            st.warning(f"⚠️ 受注されたが積載されていない製品が {len(unplanned_orders)} 件あります")
+            unplanned_df = pd.DataFrame(unplanned_orders)
+            st.dataframe(
+                unplanned_df,
+                width='stretch',
+                hide_index=True
+            )
+            st.markdown("---")
         
         view_type = st.radio(
             "表示形式",
@@ -1085,8 +1106,10 @@ class TransportPage:
             st.code(traceback.format_exc())
             return None
 
+# ui/pages/transport_page.py の _show_daily_view メソッドを修正
+
     def _show_daily_view(self, daily_plans):
-        """日別表示"""
+        """日別表示 - デバッグ出力追加版"""
         
         for date_str in sorted(daily_plans.keys()):
             plan = daily_plans[date_str]
@@ -1109,21 +1132,38 @@ class TransportPage:
                 for i, truck_plan in enumerate(trucks, 1):
                     st.markdown(f"**🚛 便 #{i}: {truck_plan.get('truck_name', 'トラック名不明')}**")
                     
+                    # ✅ デバッグ: truck_planの構造を確認
+                    st.write("🔍 デバッグ: truck_plan構造")
+                    st.json(truck_plan)
+                    
                     util = truck_plan.get('utilization', {})
-                    col_u1, col_u2 = st.columns(2)
+                    col_u1, col_u2, col_u3 = st.columns(3)
                     with col_u1:
-                        st.metric("体積積載率", f"{util.get('volume_rate', 0)}%")
+                        st.metric("床面積積載率", f"{util.get('floor_area_rate', 0)}%")
                     with col_u2:
+                        st.metric("体積積載率", f"{util.get('volume_rate', 0)}%")
+                    with col_u3:
                         st.metric("重量積載率", f"{util.get('weight_rate', 0)}%")
                     
                     loaded_items = truck_plan.get('loaded_items', [])
+                    
+                    # ✅ デバッグ: loaded_itemsの中身を確認
+                    st.write(f"🔍 デバッグ: loaded_items数 = {len(loaded_items)}")
                     if loaded_items:
+                        st.write("🔍 デバッグ: 最初のitem構造")
+                        st.json(loaded_items[0])
+                    
+                    if loaded_items:
+                        # ✅ 修正: container_nameフィールドも確認
                         items_df = pd.DataFrame([{
                             '製品コード': item.get('product_code', ''),
                             '製品名': item.get('product_name', ''),
+                            '容器名': item.get('container_name', '不明'),  # ← 追加
                             '容器数': item.get('num_containers', 0),
                             '合計数量': item.get('total_quantity', 0),
-                            '納期': item['delivery_date'].strftime('%Y-%m-%d') if 'delivery_date' in item else ''
+                            '床面積': f"{item.get('floor_area', 0):.2f}m²",  # ← 追加
+                            '納期': item['delivery_date'].strftime('%Y-%m-%d') if 'delivery_date' in item else '',
+                            '前倒し': '✓' if item.get('is_advanced', False) else '',  # ← 追加
                         } for item in loaded_items])
                         
                         st.dataframe(items_df, use_container_width=True, hide_index=True)
