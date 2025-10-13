@@ -268,10 +268,6 @@ class TransportPlanner:
                     offset = int(truck_map[truck_id].get('arrival_day_offset', 0))
                     loading_date = delivery_date - timedelta(days=offset)
                     
-                    # デバッグ出力（製品ID 5を優先表示）
-                    if product_id == 5 or truck_id == 10 or product_id in [1, 2, 3]:
-                        print(f"🔍 製品ID {product_id} ({product.get('product_code')}): トラックID {truck_id}, オフセット={offset}, 納期={delivery_date}, 積載日={loading_date}")
-                    
                     # 営業日チェック
                     original_loading_date = loading_date
                     if self.calendar_repo:
@@ -280,15 +276,7 @@ class TransportPlanner:
                                 break
                             loading_date -= timedelta(days=1)
                     
-                    # デバッグ出力（営業日調整後）
-                    if (product_id == 5 or truck_id == 10 or product_id in [1, 2, 3]) and original_loading_date != loading_date:
-                        print(f"  → 営業日調整: {original_loading_date} → {loading_date}")
-                    
                     truck_loading_dates[truck_id] = loading_date
-            
-            # デバッグ: 最終的なtruck_loading_datesを表示
-            if product_id == 5:
-                print(f"   最終truck_loading_dates: {truck_loading_dates}")
             
             # ✅ 修正: 各トラックの積載日ごとに需要を配置
             # トラックごとに異なる積載日がある場合、最も早い日を基準にする
