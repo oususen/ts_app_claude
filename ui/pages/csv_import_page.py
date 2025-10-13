@@ -3,13 +3,14 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timedelta
 from services.csv_import_service import CSVImportService
+from services.transport_service import TransportService
 
 class CSVImportPage:
     """CSV受注インポートページ"""
     
     def __init__(self, db_manager):
         self.import_service = CSVImportService(db_manager)
-    
+        self.service = TransportService(db_manager)    
     def show(self):
         """ページ表示"""
         st.title("📥 受注CSVインポート")
@@ -39,7 +40,22 @@ class CSVImportPage:
         - 同じ製品コード×日付のデータは数量が合算されます
         - 検査区分が違っても製品コードが同じなら納入進度では統合されます
         """)
-        
+        with st.expander("計画進度の再計算"):
+            product_id = st.number_input("製品ID", min_value=1, step=1, key="recalc_product_id_upload")
+            recal_start_date = st.date_input("再計算開始日", key="recalc_start_date_upload")
+            recal_end_date = st.date_input("再計算終了日", key="recalc_end_date_upload")
+
+            col_recalc_single, col_recalc_all = st.columns(2)
+
+            with col_recalc_single:
+                if st.button("選択製品のみ再計算", key="recalc_single_upload"):
+                    self.service.recompute_planned_progress(product_id, recal_start_date, recal_end_date)
+                    st.success("再計算が完了しました")
+
+            with col_recalc_all:
+                if st.button("全製品を再計算", key="recalc_all_upload"):
+                    self.service.recompute_planned_progress_all(recal_start_date, recal_end_date)
+                    st.success("全ての製品に対する再計算が完了しました")
         # ファイルアップロード
         uploaded_file = st.file_uploader(
             "CSVファイルを選択",
@@ -127,12 +143,29 @@ class CSVImportPage:
             except Exception as e:
                 st.error(f"ファイル読み込みエラー: {e}")
                 st.info("ファイルがShift-JIS形式であることを確認してください")
-    
+                
+            
     def _show_inspection_products_after_import(self):
         """インポート後に検査対象製品（F/$含む）を表示"""
         from sqlalchemy import text
         
         session = self.import_service.db.get_session()
+        with st.expander("計画進度の再計算"):
+            product_id = st.number_input("製品ID", min_value=1, step=1, key="recalc_product_id_inspection")
+            recal_start_date = st.date_input("再計算開始日", key="recalc_start_date_inspection")
+            recal_end_date = st.date_input("再計算終了日", key="recalc_end_date_inspection")
+
+            col_recalc_single, col_recalc_all = st.columns(2)
+
+            with col_recalc_single:
+                if st.button("選択製品のみ再計算", key="recalc_single_inspection"):
+                    self.service.recompute_planned_progress(product_id, recal_start_date, recal_end_date)
+                    st.success("再計算が完了しました")
+
+            with col_recalc_all:
+                if st.button("全製品を再計算", key="recalc_all_inspection"):
+                    self.service.recompute_planned_progress_all(recal_start_date, recal_end_date)
+                    st.success("全ての製品に対する再計算が完了しました")
         
         try:
             # 日付範囲を調整（当日～1ヶ月後）
