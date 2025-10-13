@@ -14,7 +14,7 @@ import pandas as pd
 from datetime import datetime
 from io import BytesIO
 import json
-
+from sqlalchemy import text
 
 class TransportService:
     """運送関連ビジネスロジック（カレンダー統合版）"""
@@ -492,3 +492,23 @@ class TransportService:
         except Exception as e:
             print(f"バージョン作成エラー: {e}")
             return 0        
+    #ストアドを呼び出して計画進度を再計算
+    def recompute_planned_progress(self, product_id: int, start_date: date, end_date: date) -> None:
+        """登録済みストアドを呼び出して計画進度を再計算"""
+        session = self.db.get_session()
+        try:
+            session.execute(
+                text("CALL recompute_planned_progress_by_product(:pid, :s, :e)"),
+                {"pid": product_id, "s": start_date, "e": end_date}
+            )
+            session.commit()
+        finally:
+            session.close()
+
+    def recompute_planned_progress_all(self, start_date: date, end_date: date) -> None:
+        products = self.product_repo.get_all_products()
+        if products is None or products.empty or 'id' not in products.columns:
+            return
+        product_ids = products['id'].dropna().astype(int).tolist()
+        for pid in product_ids:
+            self.recompute_planned_progress(pid, start_date, end_date)

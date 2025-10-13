@@ -75,7 +75,24 @@ class DeliveryProgressPage:
         # 進度データ取得
         try:
             progress_df = self.service.get_delivery_progress(start_date, end_date)
-            
+
+            with st.expander("計画進度の再計算"):
+                product_id = st.number_input("製品ID", min_value=1, step=1)
+                recal_start_date = st.date_input("再計算開始日")
+                recal_end_date = st.date_input("再計算終了日")
+
+                col_recalc_single, col_recalc_all = st.columns(2)
+
+                with col_recalc_single:
+                    if st.button("選択製品のみ再計算"):
+                        self.service.recompute_planned_progress(product_id, recal_start_date, recal_end_date)
+                        st.success("再計算が完了しました")
+
+                with col_recalc_all:
+                    if st.button("全製品を再計算"):
+                        self.service.recompute_planned_progress_all(recal_start_date, recal_end_date)
+                        st.success("全ての製品に対する再計算が完了しました")
+
             if not progress_df.empty:
                 # ステータスフィルター適用
                 if status_filter:
