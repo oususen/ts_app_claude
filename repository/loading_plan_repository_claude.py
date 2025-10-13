@@ -103,12 +103,7 @@ class LoadingPlanRepository:
                                 'loading_date': date_str,
                                 'truck_id': truck_plan['truck_id']
                             }
-                        # デバッグ: 各アイテムの集計前の数量を出力
-                        print(f"[DEBUG] accumulate item - product_id={product_id}, delivery_date={delivery_date}, quantity={quantity}")
                         progress_updates[key]['planned_quantity'] += quantity
-
-            # デバッグ: 収集した progress_updates の内容を出力
-            print(f"[DEBUG] progress_updates collected: {progress_updates}")
             
             # ✅ 3. delivery_progressに計画数を登録/更新
             for (product_id, delivery_date), update_data in progress_updates.items():
@@ -124,9 +119,6 @@ class LoadingPlanRepository:
                     'product_id': product_id,
                     'delivery_date': delivery_date
                 }).fetchall()
-
-                # デバッグ: 検索結果を出力
-                print(f"[DEBUG] existing_rows for product_id={product_id}, delivery_date={delivery_date}: {existing_rows}")
                 
                 if existing_rows:
                     # 既存レコードを更新
@@ -144,14 +136,6 @@ class LoadingPlanRepository:
                         'progress_id': existing_rows[0][0],
                         'planned_quantity': update_data['planned_quantity']
                     })
-
-                    # デバッグ: 更新処理の内容を出力
-                    # existing_rows[0] = (id, order_quantity, planned_quantity)
-                    try:
-                        old_planned = existing_rows[0][2]
-                    except Exception:
-                        old_planned = None
-                    print(f"[DEBUG] update progress id={existing_rows[0][0]}: old_planned_quantity={old_planned} -> new_planned_quantity={update_data['planned_quantity']}")
                 else:
                     # 新規レコードを作成（オーダーIDを自動生成）
                     order_id = f"PLAN-{delivery_date.strftime('%Y%m%d')}-{product_id:04d}"
@@ -173,9 +157,6 @@ class LoadingPlanRepository:
                         'planned_quantity': update_data['planned_quantity'],
                         'notes': f"積載計画ID:{plan_id} より自動登録"
                     })
-
-                    # デバッグ: 新規作成の内容を出力
-                    print(f"[DEBUG] insert new progress: order_id={order_id}, product_id={product_id}, delivery_date={delivery_date}, order_quantity={update_data['planned_quantity']}, planned_quantity={update_data['planned_quantity']}")
             
             # 4. 警告保存
             for date_str, plan in daily_plans.items():

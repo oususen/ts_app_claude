@@ -257,10 +257,6 @@ class TransportPlanner:
             else:
                 truck_ids = [tid for tid, t in truck_map.items() if t.get('default_use', False)]
             
-            # デバッグ: 製品のトラック設定を表示
-            if product_id == 5:
-                print(f"\n📦 製品ID {product_id} ({product.get('product_code')}): truck_ids={truck_ids}")
-            
             # 各トラックの積載日を計算
             truck_loading_dates = {}
             for truck_id in truck_ids:
@@ -351,14 +347,8 @@ class TransportPlanner:
             current_date_str = current_date.strftime('%Y-%m-%d')
             prev_date_str = prev_date.strftime('%Y-%m-%d')
             
-            print(f"🔍 前倒し処理: i={i}, current_date={current_date_str}, prev_date={prev_date_str}")
-            print(f"   最終日チェック: i == len(working_dates)-1 ? {i} == {len(working_dates)-1}")
-            print(f"   working_datesの長さ: {len(working_dates)}, 最終日は: {working_dates[-1].strftime('%Y-%m-%d')}")
-            
             # ✅ 最終日は前倒し禁止（容量オーバーでもそのまま残す）
             if current_date == working_dates[-1]:
-                print(f"🚫 最終日: {current_date_str} は前倒し処理をスキップ（容量オーバーでもそのまま残す）")
-                # 最終日の需要はそのまま維持（前倒しロジック全体をスキップ）
                 continue
             
             # ✅ 修正: トラックごとの積載状況を追跡（mm²をm²に変換）
@@ -372,7 +362,6 @@ class TransportPlanner:
             # 当日の需要を各トラックに仮割り当て
             demands_to_forward = []
             remaining_demands = []
-            split_loaded_demands = []  # ✅ 分割積載で一部積載されたものを記録
             
             for demand in adjusted_demands[current_date_str]:
                 # ✅ 既に前倒しされた需要は再度前倒ししない（1日前のみルール）
@@ -397,10 +386,6 @@ class TransportPlanner:
                         # truck_loading_datesにない場合は許可
                         valid_truck_ids.append(truck_id)
                 
-                # ✅ デバッグ: トラック候補が空でないか確認
-                if not valid_truck_ids:
-                    print(f"      ⚠️ {demand['product_code']}: 有効なトラックが見つかりません（truck_loading_dates={truck_loading_dates}, allowed={allowed_truck_ids}）")
-                
                 # ✅ 修正: 複数トラックへの分割積載を試みる
                 remaining_demand = demand.copy()
                 has_loaded_any = False  # 何か積載できたかフラグ
@@ -415,8 +400,6 @@ class TransportPlanner:
                         # 全量積載可能
                         truck_loads[truck_id]['floor_area'] += remaining_demand['floor_area']
                         has_loaded_any = True
-                        
-                        print(f"      ✅ {demand['product_code']}: トラックID {truck_id}に全量割り当て成功（残容量={remaining_capacity - remaining_demand['floor_area']:.1f}m²）")
                         
                         remaining_demand['floor_area'] = 0
                         remaining_demand['num_containers'] = 0
@@ -447,8 +430,6 @@ class TransportPlanner:
                                 remaining_demand['floor_area'] -= loadable_floor_area
                                 remaining_demand['num_containers'] -= loadable_containers
                                 has_loaded_any = True
-                                
-                                print(f"      🔄 {demand['product_code']}: トラックID {truck_id}に分割積載（{loadable_containers}容器, 残り={remaining_demand['num_containers']}容器）")
                 
                 # 積載結果を判定
                 if remaining_demand['num_containers'] <= 0:
@@ -469,10 +450,6 @@ class TransportPlanner:
                         remaining_demand['is_advanced'] = True
                         original_loading_date = demand.get('loading_date')
                         
-                        print(f"🔄 前倒し: {demand.get('product_code')} - {current_date_str} → {prev_date_str}")
-                        print(f"   元のloading_date: {original_loading_date}")
-                        print(f"   理由: 全トラック候補で容量不足（残り={remaining_demand['num_containers']}容器）")
-                        
                         for truck_id in demand.get('truck_ids', []):
                             if truck_id in demand.get('truck_loading_dates', {}):
                                 original_truck_date = demand['truck_loading_dates'][truck_id]
@@ -490,10 +467,6 @@ class TransportPlanner:
                     if demand.get('can_advance', False):
                         demand['is_advanced'] = True
                         original_loading_date = demand.get('loading_date')
-                        
-                        print(f"🔄 前倒し: {demand.get('product_code')} - {current_date_str} → {prev_date_str}")
-                        print(f"   元のloading_date: {original_loading_date}")
-                        print(f"   理由: 全トラック候補で容量不足（残り={demand['num_containers']}容器）")
                         
                         for truck_id in demand.get('truck_ids', []):
                             if truck_id in demand.get('truck_loading_dates', {}):
@@ -523,27 +496,18 @@ class TransportPlanner:
         Step3: 日次積載計画作成
         
         製品ごとに適切なトラックを選択して積載
+        
+        ✅ 修正: 分割積載時の数量計算を厳密化
         """
         truck_plans = {}
         remaining_demands = []
         warnings = []
-        
-        # デバッグ: 最終日の処理を確認
-        if current_date and current_date.strftime('%Y-%m-%d') == '2025-10-22':
-            print(f"\n📅 最終日 {current_date} の積載計画作成開始")
-            print(f"   需要数: {len(demands)}件")
-            for d in demands:
-                print(f"   - {d['product_code']}: truck_ids={d.get('truck_ids', [])}, truck_loading_dates={d.get('truck_loading_dates', {})}")
         
         # 使用可能なトラックを取得
         if use_non_default:
             available_trucks = {tid: t for tid, t in truck_map.items()}
         else:
             available_trucks = {tid: t for tid, t in truck_map.items() if t.get('default_use', False)}
-        
-        # デバッグ: 最終日の使用可能トラック
-        if current_date and current_date.strftime('%Y-%m-%d') == '2025-10-22':
-            print(f"   使用可能トラック: {list(available_trucks.keys())}")
         
         # トラック状態を初期化（mm²をm²に変換）
         truck_states = {}
@@ -558,19 +522,19 @@ class TransportPlanner:
                 'total_floor_area': truck_floor_area,
                 'loaded_container_ids': set(),
                 'priority_products': self._get_priority_products(truck_info),
-                'is_default': truck_info.get('default_use', False)  # デフォルトトラックフラグ
+                'is_default': truck_info.get('default_use', False)
             }
         
         # 製品を優先度順にソート
-        # 1. 優先積載製品指定あり
-        # 2. トラック制約あり（used_truck_ids）
         sorted_demands = self._sort_demands_by_priority(demands, truck_states)
         
         # 各製品を適切なトラックに積載
-        low_utilization_threshold = 0.7
-        deferred_for_fallback = []
         for demand in sorted_demands:
             loaded = False
+            
+            # ✅ 元の総注文数量を保存（検証用）
+            original_total_quantity = demand['total_quantity']
+            original_num_containers = demand['num_containers']
             
             # 製品のトラック制約を取得
             allowed_truck_ids = demand.get('truck_ids', [])
@@ -580,32 +544,18 @@ class TransportPlanner:
             # 制約に合うトラックのみを対象（順序を保持）
             candidate_trucks = [tid for tid in allowed_truck_ids if tid in truck_states]
             
-            # デバッグ: 候補トラックが空の場合
-            if not candidate_trucks and allowed_truck_ids:
-                warnings.append(
-                    f"⚠️ {demand['product_code']}: トラック制約{allowed_truck_ids}のトラックが使用不可"
-                )
-                print(f"      ⚠️ {demand['product_code']}: 候補トラックが見つかりません")
-                print(f"         allowed_truck_ids={allowed_truck_ids}, available_trucks={list(available_trucks.keys())}")
-            
             if not candidate_trucks:
                 # 候補トラックがない場合、積み残し
                 remaining_demands.append(demand)
                 continue
             
             # 候補トラックを優先順位でソート
-            # 1. 優先積載製品に指定されているトラック
-            # 2. 同容器が既に積載されているトラック
-            # 3. 空き容量が大きいトラック
             candidate_trucks = self._sort_candidate_trucks(
                 candidate_trucks, demand, truck_states
             )
             
             # トラックに積載を試みる
             remaining_demand = demand.copy()
-            
-            print(f"   📦 {demand['product_code']}: 積載試行開始（必要容量={demand['floor_area']:.1f}m², {demand['num_containers']}容器）")
-            print(f"      truck_ids={allowed_truck_ids}, 候補={len(candidate_trucks)}台")
             
             # ✅ 改善: 複数トラックへの分割積載を積極的に試みる
             for truck_id in candidate_trucks:
@@ -622,18 +572,8 @@ class TransportPlanner:
                     correct_loading_date = truck_loading_dates[truck_id]
                     demand_loading_date = remaining_demand.get('loading_date')
                     
-                    # デバッグ: 最終日の積載日チェック（製品ID 5を優先表示）
-                    if current_date and (current_date.strftime('%Y-%m-%d') == '2025-10-22' or 
-                                        current_date.strftime('%Y-%m-%d') == '2025-10-15'):
-                        if demand['product_code'] == 'V053904703':
-                            print(f"      🔍 製品 {remaining_demand['product_code']}: トラックID {truck_id}")
-                            print(f"         demand_loading_date={demand_loading_date}, correct_loading_date={correct_loading_date}")
-                    
                     # 積載日が一致しない場合はスキップ
                     if demand_loading_date and correct_loading_date != demand_loading_date:
-                        if current_date and current_date.strftime('%Y-%m-%d') in ['2025-10-22', '2025-10-15']:
-                            if demand['product_code'] == 'V053904703':
-                                print(f"         → スキップ（積載日不一致）")
                         continue
                 
                 # 同じ容器が既に積載されているか確認（段積み統合用）
@@ -645,7 +585,6 @@ class TransportPlanner:
                     container = container_map.get(container_id)
                     if container and getattr(container, 'stackable', False):
                         max_stack = getattr(container, 'max_stack', 1)
-                        # ✅ mm²をm²に変換
                         floor_area_per_container = (container.width * container.depth) / 1_000_000
                         
                         # 既存の容器数を計算（同じ容器IDの全製品）
@@ -671,16 +610,14 @@ class TransportPlanner:
                 # 通常の積載チェック
                 if remaining_demand['floor_area'] <= truck_state['remaining_floor_area']:
                     # 全量積載可能
-                    loaded_item = remaining_demand.copy()  # ← コピーを作成
+                    loaded_item = remaining_demand.copy()
                     
                     truck_state['loaded_items'].append(loaded_item)
                     truck_state['remaining_floor_area'] -= remaining_demand['floor_area']
                     truck_state['loaded_container_ids'].add(remaining_demand['container_id'])
                     loaded = True
-                    print(f"      ✅ トラックID {truck_id}に全量積載成功（{remaining_demand['num_containers']}容器, 残容量={truck_state['remaining_floor_area']:.1f}m²）")
                     remaining_demand['num_containers'] = 0
                     break
-                # 同様に、分割積載の箇所も修正
                 elif truck_state['remaining_floor_area'] > 0:
                     # 一部積載可能（分割）
                     container = container_map.get(remaining_demand['container_id'])
@@ -698,6 +635,8 @@ class TransportPlanner:
                         if loadable_containers > 0 and loadable_containers < remaining_demand['num_containers']:
                             # 分割積載
                             capacity = remaining_demand.get('capacity', 1)
+                            
+                            # ✅ 重要: 積載数量は必ず「積載容器数 × 容量」で計算
                             loadable_quantity = loadable_containers * capacity
                             
                             # 段積み後の底面積
@@ -707,7 +646,6 @@ class TransportPlanner:
                             else:
                                 loadable_floor_area = floor_area_per_container * loadable_containers
                             
-
                             # ✅ 分割して積載（loaded_itemとして追加）
                             loaded_item = {
                                 'product_id': demand['product_id'],
@@ -716,7 +654,7 @@ class TransportPlanner:
                                 'container_id': demand['container_id'],
                                 'container_name': container.name,
                                 'num_containers': loadable_containers,  # ← 積載できた容器数
-                                'total_quantity': loadable_quantity,
+                                'total_quantity': loadable_quantity,     # ✅ 必ず「容器数×容量」
                                 'floor_area': loadable_floor_area,
                                 'floor_area_per_container': floor_area_per_container,
                                 'delivery_date': demand['delivery_date'],
@@ -729,18 +667,26 @@ class TransportPlanner:
                                 'stackable': getattr(container, 'stackable', False),
                                 'max_stack': max_stack
                             }
-
+                            
+                            # ✅ 検証: 数量が容器数×容量と一致するか確認
+                            assert loaded_item['total_quantity'] == loaded_item['num_containers'] * capacity, \
+                                f"数量計算エラー: {loaded_item['total_quantity']} != {loaded_item['num_containers']} * {capacity}"
+                            
                             truck_state['loaded_items'].append(loaded_item)
                             truck_state['remaining_floor_area'] -= loadable_floor_area
                             truck_state['loaded_container_ids'].add(demand['container_id'])
-
                             
-                            # 残りを更新
+                            # ✅ 残りを更新（必ず容器数ベースで再計算）
                             remaining_demand['num_containers'] -= loadable_containers
-                            remaining_demand['total_quantity'] -= loadable_quantity
+                            remaining_demand['total_quantity'] = remaining_demand['num_containers'] * capacity
                             remaining_demand['floor_area'] -= loadable_floor_area
                             
-                            print(f"      ✅ トラックID {truck_id}に分割積載成功（{loadable_containers}容器, 残り={remaining_demand['num_containers']}容器）")
+                            # ✅ 検証: 残り数量が元の総数量を超えていないか確認
+                            assert remaining_demand['total_quantity'] <= original_total_quantity, \
+                                f"残り数量エラー: {remaining_demand['total_quantity']} > {original_total_quantity}"
+                            
+                            # デバッグログ
+                            print(f"      ✅ トラックID {truck_id}に分割積載成功（{loadable_containers}容器={loadable_quantity}個, 残り={remaining_demand['num_containers']}容器={remaining_demand['total_quantity']}個）")
                             
                             # 次のトラックへ継続（まだ残りがあれば）
                             if remaining_demand['num_containers'] > 0:
@@ -748,8 +694,10 @@ class TransportPlanner:
                             else:
                                 loaded = True
                                 break
-                
+            
+            # ✅ フォールバック: 低稼働率トラックへの再配置
             if not loaded and remaining_demand['num_containers'] > 0:
+                low_utilization_threshold = 0.7
                 fallback_candidates = [
                     state for state in truck_states.values()
                     if state['total_floor_area'] > 0 and
@@ -790,6 +738,8 @@ class TransportPlanner:
 
                     loadable_containers = min(loadable_containers, remaining_demand['num_containers'])
                     capacity = remaining_demand.get('capacity', 1)
+                    
+                    # ✅ 数量は必ず「容器数×容量」で計算
                     loadable_quantity = loadable_containers * capacity
 
                     if stackable and max_stack > 1:
@@ -805,7 +755,7 @@ class TransportPlanner:
                         'container_id': remaining_demand['container_id'],
                         'container_name': candidate_container.name,
                         'num_containers': loadable_containers,
-                        'total_quantity': loadable_quantity,
+                        'total_quantity': loadable_quantity,  # ✅ 必ず「容器数×容量」
                         'floor_area': loadable_floor_area,
                         'floor_area_per_container': floor_area_per_container,
                         'delivery_date': remaining_demand['delivery_date'],
@@ -818,25 +768,47 @@ class TransportPlanner:
                         'stackable': stackable,
                         'max_stack': max_stack
                     }
+                    
+                    # ✅ 検証
+                    assert fallback_item['total_quantity'] == fallback_item['num_containers'] * capacity, \
+                        f"フォールバック数量計算エラー: {fallback_item['total_quantity']} != {fallback_item['num_containers']} * {capacity}"
 
                     truck_state['loaded_items'].append(fallback_item)
                     truck_state['remaining_floor_area'] -= loadable_floor_area
                     truck_state['loaded_container_ids'].add(remaining_demand['container_id'])
 
                     remaining_demand['num_containers'] -= loadable_containers
-                    remaining_demand['total_quantity'] -= loadable_quantity
+                    remaining_demand['total_quantity'] = remaining_demand['num_containers'] * capacity  # ✅ 再計算
                     remaining_demand['floor_area'] -= loadable_floor_area
+                    
+                    # ✅ 検証
+                    assert remaining_demand['total_quantity'] <= original_total_quantity, \
+                        f"フォールバック残り数量エラー: {remaining_demand['total_quantity']} > {original_total_quantity}"
 
                     loaded = True
 
                 if remaining_demand['num_containers'] > 0:
-                    print(f"      ⚠️ {demand['product_code']}: 積み残し {remaining_demand['num_containers']}容器")
+                    print(f"      ⚠️ {demand['product_code']}: 積み残し {remaining_demand['num_containers']}容器={remaining_demand['total_quantity']}個")
+                    
+                    # ✅ 最終検証: 積み残し数量が正しいか確認
+                    expected_remaining_quantity = remaining_demand['num_containers'] * remaining_demand['capacity']
+                    if remaining_demand['total_quantity'] != expected_remaining_quantity:
+                        print(f"      🚨 数量不整合を検出！修正します: {remaining_demand['total_quantity']} → {expected_remaining_quantity}")
+                        remaining_demand['total_quantity'] = expected_remaining_quantity
+                    
                     remaining_demands.append(remaining_demand)
         
         # トラックプランを作成（積載があるトラックのみ）
         final_truck_plans = []
         for truck_id, truck_state in truck_states.items():
             if truck_state['loaded_items']:
+                # ✅ 各loaded_itemの数量を検証
+                for item in truck_state['loaded_items']:
+                    expected_quantity = item['num_containers'] * item['capacity']
+                    if item['total_quantity'] != expected_quantity:
+                        print(f"      🚨 積載明細の数量不整合を検出！修正します: {item['product_code']} {item['total_quantity']} → {expected_quantity}")
+                        item['total_quantity'] = expected_quantity
+                
                 # 積載率を計算（容器別に段積み考慮）
                 container_totals = {}  # container_id -> 容器数の合計
                 
@@ -887,15 +859,15 @@ class TransportPlanner:
                 if is_final_day_overflow:
                     # 最終日の容量オーバー - 特別警告
                     warnings.append(
-                        f"🚨 最終日容量オーバー: {demand['product_code']} ({demand['num_containers']}容器) ※非デフォルトトラック追加が必要"
+                        f"🚨 最終日容量オーバー: {demand['product_code']} ({demand['num_containers']}容器={demand['total_quantity']}個) ※非デフォルトトラック追加が必要"
                     )
                 elif can_advance:
                     warnings.append(
-                        f"❌ 積み残し: {demand['product_code']} ({demand['num_containers']}容器) ※前倒し配送可能"
+                        f"⚠ 積み残し: {demand['product_code']} ({demand['num_containers']}容器={demand['total_quantity']}個) ※前倒し配送可能"
                     )
                 else:
                     warnings.append(
-                        f"❌ 積み残し: {demand['product_code']} ({demand['num_containers']}容器) ※前倒し不可"
+                        f"❌ 積み残し: {demand['product_code']} ({demand['num_containers']}容器={demand['total_quantity']}個) ※前倒し不可"
                     )
         
         return {
@@ -999,15 +971,7 @@ class TransportPlanner:
                 utilization_rate
             )
         
-        sorted_trucks = sorted(candidate_trucks, key=get_truck_priority)
-        
-        # デバッグ出力
-        print(f"      🎯 {product_code}のトラック候補ソート:")
-        for truck_id in sorted_trucks[:3]:  # 上位3つまで表示
-            priority = get_truck_priority(truck_id)
-            print(f"         トラックID {truck_id}: 優先度={priority}, 残容量={truck_states[truck_id]['remaining_floor_area']:.1f}m²")
-        
-        return sorted_trucks
+        return sorted(candidate_trucks, key=get_truck_priority)
     
     def _parse_date(self, date_value):
         """日付を解析"""
@@ -1046,9 +1010,7 @@ class TransportPlanner:
             truck_ids = demand.get('truck_ids', [])
             original_loading_date = demand.get('loading_date')
             
-            print(f"  製品: {demand.get('product_code')} - truck_ids: {truck_ids}, truck_loading_dates: {truck_loading_dates}")
-            
-            # ✅ 修正: 全トラック候補を試す（翌日以降なら第1候補も空いている可能性がある）
+            # ✅ 全トラック候補を試す（翌日以降なら第1候補も空いている可能性がある）
             for truck_id in truck_ids:
                 if truck_id not in truck_loading_dates:
                     continue
@@ -1057,11 +1019,8 @@ class TransportPlanner:
                 target_date = truck_loading_dates[truck_id]
                 target_date_str = target_date.strftime('%Y-%m-%d')
                 
-                print(f"    トラックID {truck_id} - 積載日: {target_date_str}, 元の積載日: {original_loading_date}")
-                
                 # ✅ 元の積載日と同じ日はスキップ（既に失敗している）
                 if original_loading_date and target_date == original_loading_date:
-                    print(f"      → スキップ（元の積載日と同じ）")
                     continue
                 
                 # 計画期間内かチェック
@@ -1127,13 +1086,19 @@ class TransportPlanner:
                     remaining_area = truck_floor_area
                 
                 # 積載可能かチェック
-                print(f"      容量チェック: 必要={demand['floor_area']}, 空き={remaining_area}")
                 if demand['floor_area'] <= remaining_area:
                     # 積載可能！
                     print(f"      ✅ 再配置成功: トラックID {truck_id}, 日付 {target_date_str}")
 
                     loaded_item = demand.copy()
                     loaded_item['loading_date'] = target_date
+                    
+                    # ✅ 数量検証
+                    expected_quantity = loaded_item['num_containers'] * loaded_item['capacity']
+                    if loaded_item['total_quantity'] != expected_quantity:
+                        print(f"      🚨 再配置時の数量不整合を修正: {loaded_item['total_quantity']} → {expected_quantity}")
+                        loaded_item['total_quantity'] = expected_quantity
+                    
                     if original_loading_date:
                         loaded_item.setdefault('original_date', original_loading_date)
 
@@ -1184,8 +1149,6 @@ class TransportPlanner:
                     
                     relocated = True
                     break
-            
-            # 再配置できなかった場合はそのまま（警告は既に出ている）
     
     def _forward_remaining_demands(self, daily_plans, truck_map, container_map, 
                                    working_dates, use_non_default):
@@ -1229,6 +1192,12 @@ class TransportPlanner:
                 # 前倒し可能かチェック
                 if not demand.get('can_advance', False):
                     continue
+                
+                # ✅ 数量検証
+                expected_quantity = demand['num_containers'] * demand['capacity']
+                if demand['total_quantity'] != expected_quantity:
+                    print(f"      🚨 前倒し時の数量不整合を修正: {demand['product_code']} {demand['total_quantity']} → {expected_quantity}")
+                    demand['total_quantity'] = expected_quantity
                 
                 # この製品が使用できるトラックを取得
                 allowed_truck_ids = demand.get('truck_ids', [])
@@ -1301,7 +1270,10 @@ class TransportPlanner:
                             prev_plan['trucks'].append(target_truck_plan)
                             prev_plan['total_trips'] = len(prev_plan['trucks'])
                         
-                        # アイテムを追加
+                        # ✅ 数量を再検証してアイテムを追加
+                        capacity = demand['capacity']
+                        expected_quantity = demand['num_containers'] * capacity
+                        
                         target_truck_plan['loaded_items'].append({
                             'product_id': demand['product_id'],
                             'product_code': demand['product_code'],
@@ -1309,13 +1281,14 @@ class TransportPlanner:
                             'container_id': demand['container_id'],
                             'container_name': container.name,
                             'num_containers': demand['num_containers'],
-                            'total_quantity': demand['total_quantity'],
+                            'total_quantity': expected_quantity,  # ✅ 必ず「容器数×容量」
                             'floor_area_per_container': demand['floor_area'] / demand['num_containers'],
                             'delivery_date': demand['delivery_date'],
                             'loading_date': prev_date,
                             'is_advanced': True,  # 前倒しフラグ
                             'stackable': container.stackable,
-                            'max_stack': container.max_stack
+                            'max_stack': container.max_stack,
+                            'capacity': capacity
                         })
                         
                         # 積載率を再計算
@@ -1353,8 +1326,16 @@ class TransportPlanner:
         
         container_totals = {}
         
+        # ✅ 数量検証しながら集計
         for item in truck_plan['loaded_items']:
             container_id = item['container_id']
+            
+            # ✅ 数量検証
+            expected_quantity = item['num_containers'] * item.get('capacity', 1)
+            if item['total_quantity'] != expected_quantity:
+                print(f"      🚨 積載率計算時の数量不整合を修正: {item.get('product_code', 'unknown')} {item['total_quantity']} → {expected_quantity}")
+                item['total_quantity'] = expected_quantity
+            
             if container_id not in container_totals:
                 container = container_map.get(container_id)
                 if not container:
@@ -1433,6 +1414,12 @@ class TransportPlanner:
             for demand in list(remaining_demands):
                 relocated = False
                 
+                # ✅ 数量検証
+                expected_quantity = demand['num_containers'] * demand['capacity']
+                if demand['total_quantity'] != expected_quantity:
+                    print(f"      🚨 特便配送時の数量不整合を修正: {demand['product_code']} {demand['total_quantity']} → {expected_quantity}")
+                    demand['total_quantity'] = expected_quantity
+                
                 # ✅ 特便は緊急対応のため、トラック制約を無視して全非デフォルトトラックを使用可能
                 candidate_trucks = list(non_default_trucks.keys())
                 
@@ -1501,7 +1488,10 @@ class TransportPlanner:
                             prev_plan['trucks'].append(target_truck_plan)
                             prev_plan['total_trips'] = len(prev_plan['trucks'])
                         
-                        # アイテムを追加（特便フラグを設定）
+                        # ✅ アイテムを追加（特便フラグを設定）
+                        capacity = demand['capacity']
+                        expected_quantity = demand['num_containers'] * capacity
+                        
                         target_truck_plan['loaded_items'].append({
                             'product_id': demand['product_id'],
                             'product_code': demand['product_code'],
@@ -1509,13 +1499,14 @@ class TransportPlanner:
                             'container_id': demand['container_id'],
                             'container_name': container.name,
                             'num_containers': demand['num_containers'],
-                            'total_quantity': demand['total_quantity'],
+                            'total_quantity': expected_quantity,  # ✅ 必ず「容器数×容量」
                             'floor_area_per_container': demand['floor_area'] / demand['num_containers'],
                             'delivery_date': demand['delivery_date'],
                             'loading_date': prev_date,
                             'is_special_delivery': True,  # 特便フラグ
                             'stackable': container.stackable,
-                            'max_stack': container.max_stack
+                            'max_stack': container.max_stack,
+                            'capacity': capacity
                         })
                         
                         # 積載率を再計算
@@ -1541,6 +1532,7 @@ class TransportPlanner:
             planned_keys = daily_plans.keys()
         else:
             planned_keys = [date.strftime('%Y-%m-%d') for date in planned_dates]
+        
         total_trips = sum(daily_plans[key]['total_trips'] for key in planned_keys if key in daily_plans)
         total_warnings = sum(len(daily_plans[key]['warnings']) for key in planned_keys if key in daily_plans)
         
@@ -1552,3 +1544,4 @@ class TransportPlanner:
             'use_non_default_truck': use_non_default,
             'status': '正常' if total_warnings == 0 else '警告あり'
         }
+                                              
