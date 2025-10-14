@@ -307,7 +307,7 @@ class CSVImportService:
                     'day_number': day_count,
                     'inspection_category': v3_row['検査区分']
                 })
-
+                
                 instruction_count += 1
                 day_count += 1
             

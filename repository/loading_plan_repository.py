@@ -91,7 +91,23 @@ class LoadingPlanRepository:
                         
                         # ✅ delivery_progress更新用データを収集
                         product_id = item['product_id']
+                        # ✅ delivery_dateをdate型に正規化（文字列/日時の可能性に対応）
                         delivery_date = item['delivery_date']
+                        try:
+                            from datetime import datetime as _dt
+                            if isinstance(delivery_date, str) and delivery_date:
+                                delivery_date = _dt.strptime(delivery_date, '%Y-%m-%d').date()
+                            elif hasattr(delivery_date, 'date'):
+                                delivery_date = delivery_date.date()
+                        except Exception:
+                            pass
+                        # ✅ 納期が未設定/Noneのときは loading_date（日付文字列）を使用
+                        if not delivery_date:
+                            try:
+                                from datetime import datetime as _dt
+                                delivery_date = _dt.strptime(date_str, '%Y-%m-%d').date()
+                            except Exception:
+                                delivery_date = None
                         quantity = item['total_quantity']
                         
                         key = (product_id, delivery_date)
@@ -109,15 +125,35 @@ class LoadingPlanRepository:
 
             # デバッグ: 収集した progress_updates の内容を出力
             print(f"[DEBUG] progress_updates collected: {progress_updates}")
-            
-            # ✅ 3. delivery_progressに計画数を登録/更新
+
+            # ✅ 3. 計画期間内のplanned_quantityを一旦0にリセット（今回未計画分を0化）
+            try:
+                reset_sql = text("""
+                    UPDATE delivery_progress
+                    SET planned_quantity = 0,
+                        status = CASE 
+                            WHEN shipped_quantity >= order_quantity THEN '出荷完了'
+                            WHEN shipped_quantity > 0 THEN '一部出荷'
+                            ELSE status
+                        END
+                    WHERE DATE(delivery_date) BETWEEN :start_date AND :end_date
+                """)
+                session.execute(reset_sql, {
+                    'start_date': start_date,
+                    'end_date': end_date
+                })
+                print(f"[DEBUG] reset planned_quantity to 0 between {start_date} and {end_date}")
+            except Exception as _:
+                pass
+
+            # ✅ 4. delivery_progressに計画数を登録/更新
             for (product_id, delivery_date), update_data in progress_updates.items():
-                # 既存のdelivery_progressレコードを検索
+                # 既存のdelivery_progressレコードを検索（納期が未設定なら積載日で照合）
                 check_sql = text("""
                     SELECT id, order_quantity, planned_quantity 
                     FROM delivery_progress
                     WHERE product_id = :product_id 
-                    AND delivery_date = :delivery_date
+                    AND DATE(delivery_date) = :delivery_date
                 """)
                 
                 existing_rows = session.execute(check_sql, {
@@ -133,6 +169,10 @@ class LoadingPlanRepository:
                     update_sql = text("""
                         UPDATE delivery_progress
                         SET planned_quantity = :planned_quantity,
+                            order_quantity = CASE 
+                                WHEN (order_quantity IS NULL OR order_quantity = 0) THEN :planned_quantity
+                                ELSE order_quantity
+                            END,
                             status = CASE 
                                 WHEN shipped_quantity >= order_quantity THEN '出荷完了'
                                 WHEN shipped_quantity > 0 THEN '一部出荷'

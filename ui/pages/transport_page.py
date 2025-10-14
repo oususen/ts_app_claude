@@ -195,8 +195,8 @@ class TransportPage:
         with col1:
             start_date = st.date_input(
                 "計画開始日",
-                value=date.today(),
-                min_value=date.today(),
+                value=date.today() - timedelta(days=15),
+                min_value=date.today() - timedelta(days=15),
                 help="積載計画の開始日（納期の最も早い日付を含めてください）"
             )
         
