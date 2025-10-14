@@ -92,7 +92,25 @@ class DeliveryProgressPage:
                     if st.button("全製品を再計算"):
                         self.service.recompute_planned_progress_all(recal_start_date, recal_end_date)
                         st.success("全ての製品に対する再計算が完了しました")
+            
+            # ▼ ここから追加：実績進度（shipped_remaining_quantity）の再計算
+            with st.expander("実績進度の再計算（shipped_remaining_quantity）"):
+                sr_product_id = st.number_input("製品ID（実績）", min_value=1, step=1, key="sr_product_id")
+                sr_start_date = st.date_input("再計算開始日（実績）", key="sr_start_date")
+                sr_end_date = st.date_input("再計算終了日（実績）", key="sr_end_date")
 
+                col_sr_one, col_sr_all = st.columns(2)
+
+                with col_sr_one:
+                    if st.button("選択製品の実績進度を再計算", key="btn_sr_one"):
+                        self.service.recompute_shipped_remaining(sr_product_id, sr_start_date, sr_end_date)
+                        st.success("実績進度の再計算が完了しました")
+
+                with col_sr_all:
+                    if st.button("全製品の実績進度を再計算", key="btn_sr_all"):
+                        self.service.recompute_shipped_remaining_all(sr_start_date, sr_end_date)
+                        st.success("全製品の実績進度の再計算が完了しました")
+                              
             if not progress_df.empty:
                 # ステータスフィルター適用
                 if status_filter:
@@ -408,6 +426,7 @@ class DeliveryProgressPage:
             # 各指標の行を作成
             order_row = {'製品コード': product_code, '状態': '受注数', 'row_type': 'order'}
             planned_row = {'製品コード': '', '状態': '納入計画数', 'row_type': 'planned'}
+            planned_progress_row = {'製品コード': '', '状態': '計画進度', 'row_type': 'planned_progress'}
             shipped_row = {'製品コード': '', '状態': '納入実績', 'row_type': 'shipped'}
             progress_row = {'製品コード': '', '状態': '進度', 'row_type': 'progress'}
             keisen_row = {'製品コード': '', '状態': '___', 'row_type': 'ーーー'}
@@ -443,17 +462,19 @@ class DeliveryProgressPage:
                     
                     order_row[date_str] = order_qty
                     planned_row[date_str] = planned_qty
+                    planned_progress_row[date_str] = cumulative_planned - cumulative_order
                     shipped_row[date_str] = shipped_qty
                 else:
                     order_row[date_str] = 0
                     planned_row[date_str] = 0
+                    planned_progress_row[date_str] = cumulative_planned - cumulative_order
                     shipped_row[date_str] = 0
                 
                 # 進度 = 累計出荷 - 累計受注
                 progress = cumulative_shipped - cumulative_order
                 progress_row[date_str] = int(progress)
             
-            result_rows.extend([order_row, planned_row, shipped_row, progress_row, keisen_row])
+            result_rows.extend([order_row, planned_row, planned_progress_row, shipped_row, progress_row, keisen_row])
         
         # DataFrameに変換
         result_df = pd.DataFrame(result_rows)
@@ -483,7 +504,7 @@ class DeliveryProgressPage:
                     pinned=True
                 ),
                 "row_type": None,  # 非表示
-                **{col: st.column_config.NumberColumn(col, min_value=0, step=1) for col in date_columns}
+                **{col: st.column_config.NumberColumn(col, step=1) for col in date_columns}
             },
             key="matrix_editor"
         )
@@ -511,7 +532,7 @@ class DeliveryProgressPage:
                     st.info("変更はありませんでした")
         
         with col_save2:
-            st.caption("※ 「進度」行は自動計算されます（累計出荷 - 累計受注）")
+            st.caption("※ 「計画進度」「進度」行は自動計算されます（計画進度=累計計画 - 累計受注、進度=累計出荷 - 累計受注）")
         
         # 説明
         with st.expander("📋 表の見方"):
@@ -519,6 +540,7 @@ class DeliveryProgressPage:
             **各行の意味:**
             - **受注数**: その日の受注数量（編集不可）
             - **納入計画数**: 積載計画で設定された数量（編集可）
+            - **計画進度**: 累計計画 - 累計受注（自動計算）
             - **納入実績**: 実際に出荷した数量（編集可）
             - **進度**: 累計出荷 - 累計受注（自動計算、マイナスは未納分）
             

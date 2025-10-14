@@ -91,16 +91,16 @@ class CSVImportService:
                     simple_product_id = result.lastrowid
                 
                 # ✅ 2. 既存のproducts_syosaiテーブルにも保存（全データ）
-                unique_key = (int(row['データＮＯ']), product_code, row['検査区分'])
+                data_no = int(row['データＮＯ']) if str(row['データＮＯ']).strip() else None
+                inspection_category = row['検査区分']
+                unique_key = (product_code, inspection_category)
                 result = session.execute(text("""
                     SELECT id FROM products_syosai 
-                    WHERE data_no = :data_no 
-                    AND product_code = :product_code 
+                    WHERE product_code = :product_code 
                     AND inspection_category = :inspection_category
                 """), {
-                    'data_no': unique_key[0],
-                    'product_code': unique_key[1],
-                    'inspection_category': unique_key[2]
+                    'product_code': product_code,
+                    'inspection_category': inspection_category
                 }).fetchone()
                 
                 if not result:
@@ -166,8 +166,11 @@ class CSVImportService:
                     
                     session.execute(sql, params)
                 
-                # ✅ 3. マッピング：既存コードを新しいテーブル参照に変更
-                product_ids[unique_key] = simple_product_id
+                # ✅ 3. マッピング（製品コード+検査区分）→ product_id と data_no を保持
+                product_ids[unique_key] = {
+                    'product_id': simple_product_id,
+                    'data_no': data_no
+                }
             
             session.commit()
             return product_ids
@@ -190,11 +193,15 @@ class CSVImportService:
             
             for idx, v3_row in v3_rows.iterrows():
                 # ✅ 検査区分を含むユニークキー（マッピング用）
-                unique_key = (int(v3_row['データＮＯ']), v3_row['品番'], v3_row['検査区分'])
-                product_id = product_ids.get(unique_key)
+                product_code = v3_row['品番']
+                inspection_category = v3_row['検査区分']
+                unique_key = (product_code, inspection_category)
+                mapping = product_ids.get(unique_key)
                 
-                if not product_id:
+                if not mapping:
                     continue
+                
+                product_id = mapping['product_id']
                 
                 # V2行とマッチング
                 v2_match = v2_rows[
@@ -257,7 +264,7 @@ class CSVImportService:
             'month_year': start_month
         })
         
-        # 日次データ
+        # 日次データ（数量0でも記録するルール）
         day_count = 1
         
         for i in range(start_col, min(end_col, len(v2_row))):
@@ -265,35 +272,44 @@ class CSVImportService:
                 date_str = str(v2_row.iloc[i]).strip()
                 quantity_str = str(v3_row.iloc[i]).strip()
                 
-                if date_str and date_str not in ['', 'nan'] and quantity_str and quantity_str not in ['0', 'nan', '']:
-                    instruction_date = self._parse_japanese_date(date_str)
-                    quantity = int(float(quantity_str))
-                    
-                    if instruction_date and quantity > 0:
-                        session.execute(text("""
-                            REPLACE INTO production_instructions_detail 
-                            (product_id, record_type, start_month, total_first_month, 
-                            total_next_month, total_next_next_month, instruction_date, 
-                            instruction_quantity, month_type, day_number, inspection_category)
-                            VALUES (:product_id, :record_type, :start_month, :total_first, 
-                            :total_next, :total_next_next, :instruction_date, 
-                            :quantity, :month_type, :day_number, :inspection_category)
-                        """), {
-                            'product_id': product_id,
-                            'record_type': v3_row['レコード識別'],
-                            'start_month': start_month,
-                            'total_first': int(v3_row['初月度（指示）数合計']) if str(v3_row['初月度（指示）数合計']).strip() else 0,
-                            'total_next': int(v3_row['次月度(指示）数合計']) if str(v3_row['次月度(指示）数合計']).strip() else 0,
-                            'total_next_next': int(v3_row['次々月度(指示)数合計']) if str(v3_row['次々月度(指示)数合計']).strip() else 0,
-                            'instruction_date': instruction_date,
-                            'quantity': quantity,
-                            'month_type': month_type,
-                            'day_number': day_count,
-                            'inspection_category': v3_row['検査区分']
-                        })
-                        
-                        instruction_count += 1
-                        day_count += 1
+                if not date_str or date_str in ['', 'nan']:
+                    continue
+                instruction_date = self._parse_japanese_date(date_str)
+                if not instruction_date:
+                    continue
+
+                quantity = 0
+                if quantity_str and quantity_str not in ['nan', '']:
+                    try:
+                        quantity = int(float(quantity_str))
+                    except ValueError:
+                        quantity = 0
+
+                # ✅ 数量0でもREPLACEで保持（削除はしない）
+                session.execute(text("""
+                    REPLACE INTO production_instructions_detail 
+                    (product_id, record_type, start_month, total_first_month, 
+                    total_next_month, total_next_next_month, instruction_date, 
+                    instruction_quantity, month_type, day_number, inspection_category)
+                    VALUES (:product_id, :record_type, :start_month, :total_first, 
+                    :total_next, :total_next_next, :instruction_date, 
+                    :quantity, :month_type, :day_number, :inspection_category)
+                """), {
+                    'product_id': product_id,
+                    'record_type': v3_row['レコード識別'],
+                    'start_month': start_month,
+                    'total_first': int(v3_row['初月度（指示）数合計']) if str(v3_row['初月度（指示）数合計']).strip() else 0,
+                    'total_next': int(v3_row['次月度(指示）数合計']) if str(v3_row['次月度(指示）数合計']).strip() else 0,
+                    'total_next_next': int(v3_row['次々月度(指示)数合計']) if str(v3_row['次々月度(指示)数合計']).strip() else 0,
+                    'instruction_date': instruction_date,
+                    'quantity': quantity,
+                    'month_type': month_type,
+                    'day_number': day_count,
+                    'inspection_category': v3_row['検査区分']
+                })
+
+                instruction_count += 1
+                day_count += 1
             
             except Exception:
                 continue
@@ -323,7 +339,6 @@ class CSVImportService:
                     SUM(pid.instruction_quantity) as total_quantity
                 FROM production_instructions_detail pid
                 JOIN products p ON pid.product_id = p.id
-                WHERE pid.instruction_quantity > 0
                 GROUP BY p.product_code, pid.instruction_date
                 ORDER BY p.product_code, pid.instruction_date
             """)).fetchall()
@@ -338,26 +353,23 @@ class CSVImportService:
             
             # ✅ ステップ2: 代表product_idのマッピングを作成
             product_code_to_id = {}
-            for product_key, product_id in product_ids.items():
-                data_no, product_code, inspection_category = product_key
+            for product_key, product_info in product_ids.items():
+                product_code, inspection_category = product_key
                 if product_code not in product_code_to_id:
-                    product_code_to_id[product_code] = product_id
+                    product_code_to_id[product_code] = product_info
             
             # ✅ ステップ3: 集約したデータをdelivery_progressに登録
             for (product_code, instruction_date), total_quantity in consolidated_instructions.items():
                 if product_code not in product_code_to_id:
                     continue
                     
-                representative_product_id = product_code_to_id[product_code]
+                product_info = product_code_to_id[product_code]
+                representative_product_id = product_info['product_id']
                 
                 # データNOを取得（最初に見つかったもの）
-                data_no = None
-                for product_key in product_ids.keys():
-                    if product_key[1] == product_code:
-                        data_no = product_key[0]
-                        break
+                data_no = product_info.get('data_no')
                 
-                if not data_no:
+                if data_no is None:
                     continue
                 
                 # オーダーIDを生成（製品コードベース）
@@ -370,24 +382,20 @@ class CSVImportService:
                 """), {'order_id': order_id}).fetchone()
                 
                 if existing:
-                    # ✅ 既存レコードがあれば数量を更新（集約後の正しい数量で）
+                    # ✅ 既存レコードがあれば常に更新（数量0や同値でも更新）
                     existing_id = existing[0]
                     existing_quantity = existing[1]
-                    
-                    # 数量が異なる場合のみ更新
-                    if existing_quantity != total_quantity:
-                        session.execute(text("""
-                            UPDATE delivery_progress
-                            SET order_quantity = :new_quantity,
-                                notes = :notes
-                            WHERE id = :progress_id
-                        """), {
-                            'progress_id': existing_id,
-                            'new_quantity': total_quantity,
-                            'notes': f'製品コード: {product_code} (数量更新: {existing_quantity}→{total_quantity})'
-                        })
-                        
-                        progress_count += 1
+                    session.execute(text("""
+                        UPDATE delivery_progress
+                        SET order_quantity = :new_quantity,
+                            notes = :notes
+                        WHERE id = :progress_id
+                    """), {
+                        'progress_id': existing_id,
+                        'new_quantity': total_quantity,
+                        'notes': f'製品コード: {product_code} (数量更新: {existing_quantity}→{total_quantity})'
+                    })
+                    progress_count += 1
                 else:
                     # ✅ 新規登録
                     session.execute(text("""

@@ -512,3 +512,32 @@ class TransportService:
         product_ids = products['id'].dropna().astype(int).tolist()
         for pid in product_ids:
             self.recompute_planned_progress(pid, start_date, end_date)
+    # --- 実績進度（shipped_remaining_quantity）の再計算 ---
+    def recompute_shipped_remaining(self, product_id: int, start_date: date, end_date: date) -> None:
+        """
+        ストアドを呼び出して実績進度（shipped_remaining_quantity）を再計算
+        期待するSP名: recompute_shipped_remaining_by_product(pid, start, end)
+        """
+        session = self.db.get_session()
+        try:
+            session.execute(
+                text("CALL recompute_shipped_remaining_by_product(:pid, :s, :e)"),
+                {"pid": product_id, "s": start_date, "e": end_date}
+            )
+            session.commit()
+        finally:
+            session.close()
+
+    def recompute_shipped_remaining_all(self, start_date: date, end_date: date) -> None:
+        """
+        全製品分を一括再計算（期間内の全製品IDを対象）
+        - 既存の planned_all と同様に product_repo を使う簡易版
+        - 期間内に存在する製品だけに絞りたい場合は delivery_progress から DISTINCT 取得に差し替え可
+        """
+        products = self.product_repo.get_all_products()
+        if products is None or products.empty or 'id' not in products.columns:
+            return
+        product_ids = products['id'].dropna().astype(int).tolist()
+        for pid in product_ids:
+            self.recompute_shipped_remaining(pid, start_date, end_date)
+
