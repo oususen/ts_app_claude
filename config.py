@@ -37,3 +37,7 @@ class AppConfig:
 # 設定インスタンス
 DB_CONFIG = DatabaseConfig()
 APP_CONFIG = AppConfig()
+
+
+
+
