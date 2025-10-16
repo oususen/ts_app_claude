@@ -110,6 +110,52 @@ class TransportService:
                     orders_df['delivery_date'].apply(self.calendar_repo.is_working_day)
                 ].reset_index(drop=True)
         
+        if orders_df is not None and not orders_df.empty:
+            if 'delivery_date' in orders_df.columns:
+                orders_df['delivery_date'] = pd.to_datetime(orders_df['delivery_date']).dt.date
+
+            if use_calendar and self.calendar_repo:
+                orders_df = orders_df[
+                    orders_df['delivery_date'].apply(self.calendar_repo.is_working_day)
+                ].reset_index(drop=True)
+
+            # 納入進捗・計画進度を加味した計画数量を算出
+            remaining_qty = None
+            if 'remaining_quantity' in orders_df.columns:
+                remaining_qty = orders_df['remaining_quantity']
+            elif {'order_quantity', 'shipped_quantity'}.issubset(orders_df.columns):
+                remaining_qty = orders_df['order_quantity'] - orders_df['shipped_quantity']
+
+            if remaining_qty is not None:
+                orders_df['__remaining_qty'] = remaining_qty.fillna(0).clip(lower=0)
+            else:
+                if 'order_quantity' in orders_df.columns:
+                    remaining_base = orders_df['order_quantity'].fillna(0)
+                else:
+                    remaining_base = pd.Series(0, index=orders_df.index)
+                orders_df['__remaining_qty'] = remaining_base.clip(lower=0)
+
+            if 'planned_progress_quantity' in orders_df.columns:
+                orders_df['__progress_deficit'] = orders_df['planned_progress_quantity'].fillna(0).apply(
+                    lambda x: max(0, -x)
+                )
+            else:
+                orders_df['__progress_deficit'] = 0
+
+            # 計画数量は基本的に残数量。計画進度がマイナスの場合は不足分を優先しつつ残数量を上限とする
+            orders_df['planning_quantity'] = orders_df['__remaining_qty']
+            backlog_mask = orders_df['__progress_deficit'] > 0
+            if backlog_mask.any():
+                orders_df.loc[backlog_mask, 'planning_quantity'] = orders_df.loc[backlog_mask].apply(
+                    lambda row: min(row['__remaining_qty'], row['__progress_deficit']) if row['__remaining_qty'] > 0 else 0,
+                    axis=1
+                )
+
+            # 残/不足ともに0の場合はスキップ
+            orders_df = orders_df[orders_df['planning_quantity'] > 0].reset_index(drop=True)
+
+            orders_df.drop(columns=['__remaining_qty', '__progress_deficit'], inplace=True, errors='ignore')
+
         if orders_df is None or orders_df.empty:
             return {
                 'daily_plans': {},

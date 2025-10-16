@@ -208,76 +208,30 @@ class TransportPlanner:
             if not container:
                 continue
             
-            # 数学的に正確な数量計算
             try:
                 raw_capacity = product.get('capacity')
                 if raw_capacity is None or pd.isna(raw_capacity):
-                    print(f"    ⚠️ 警告: 容器容量が未設定 (製品コード: {product.get('product_code', '不明')})")
                     raw_capacity = 1
-                
-                capacity = max(1, int(raw_capacity))  # 1未満防止
-                quantity = int(order.get('order_quantity', 0))
-                
-                delivery_date_str = delivery_date.strftime('%Y-%m-%d') if delivery_date else '不明'
-                print(f"\n📊 製品{product.get('product_code', '不明')}の計画数計算:")
-                print(f"  ⚡ 基本情報:")
-                print(f"    - delivery_date（納期日）: {delivery_date_str}")
-                print(f"  ⚡ 基本変数:")
-                print(f"    - order_quantity（注文数）: {quantity}")
-                print(f"    - capacity（容器容量）: {capacity}")
-                
-                if quantity < 0:
-                    print(f"    ⚠️ 警告: 注文数量が負数 → 0に補正")
-                    quantity = 0
-            except Exception as e:
-                print(f"    ⚠️ 容器容量・数量計算で例外発生: {e}")
+                capacity = max(1, int(raw_capacity))
+            except Exception:
+                capacity = 1
+
+            planning_quantity = order.get('planning_quantity', order.get('order_quantity', 0))
+            try:
+                quantity = int(planning_quantity)
+            except (TypeError, ValueError):
+                quantity = 0
+
+            if quantity <= 0:
                 continue
-            
-            # 正確な容器数と数量の計算（最終修正版）
-            remainder = quantity % capacity  # 余りを計算
-            # 余り分に使用容器の余剰を計算する
+
+            remainder = quantity % capacity
+            if quantity == 0:
+                num_containers = 0
+            else:
+                num_containers = (quantity + capacity - 1) // capacity
             surplus = capacity - remainder if remainder > 0 else 0
-            num_containers = quantity // capacity  # 基本容器数（切り捨て）
-            
-            if remainder > 0:
-                num_containers += 1  # 余りがある場合は容器数を1増やす
-            
-            # 計画数 = (容器数 × 容器容量) - remainder
-            max_capacity = num_containers * capacity
-            total_quantity = max_capacity - remainder
-            
-            print("  ⚡ 数量計算詳細:")
-            print(f"    - 注文数: {quantity}")
-            print(f"    - 容器容量: {capacity}")
-            print(f"    - 必要容器数: {num_containers}")
-            print(f"    - 余り: {remainder}")
-            print(f"    - 余剰: {surplus}")
-            print(f"    - 容器総容量: {max_capacity}")
-            print(f"    - 最終計画数: {total_quantity}")
-            
-            print(f"  ⚡ 容器数計算:")
-            print(f"    - remainder（余り）: {remainder}")
-            print(f"    - num_containers（基本容器数）: {num_containers}")
-            
-            if remainder > 0:
-                print(f"    - num_containers（余り考慮後）: {num_containers}")
-            
-            
-            # 実際の容器容量と計画数の検証
-            print(f"  ⚡ 計画数の検証:")
-            print(f"    - max_capacity（容器の最大容量）: {max_capacity}")
-            print(f"    - total_quantity（計画総数）: {total_quantity}")
-            
-            if max_capacity > total_quantity:
-                print(f"    ℹ️ 情報: 容器容量 ({max_capacity}) > 計画総数 ({total_quantity})")
-                # 余りがある場合は正常なので警告は出さない
-                if remainder == 0:
-                    print(f"    ⚠️ 警告: 余りなしで容器容量が過剰です")
-
-             # 検証（必ずTrueになる）
-
-            assert (num_containers - 1)*capacity <= quantity <= num_containers*capacity
-            assert total_quantity == quantity, f"計算誤差: {total_quantity}≠{quantity}"
+            total_quantity = quantity
             
             # 容器ごとの底面積計算（段積み考慮）
             floor_area_per_container = (container.width * container.depth) / 1_000_000
@@ -327,13 +281,9 @@ class TransportPlanner:
 
                 # ✅ 最終的な数量チェックと補正 直した　下記アウトしたs
                 final_capacity = capacity * num_containers
-                if final_capacity > quantity:
-                    print(f"    ⚠️ 警告: 過剰な容器容量 ({final_capacity} > {quantity})")
-                    # 容器数を最適化（切り上げで計算）
-                    optimized_containers = (quantity + capacity - 1) // capacity
-                    if optimized_containers < num_containers:
-                        print(f"    🔄 容器数を最適化: {num_containers} → {optimized_containers}")
-                        num_containers = optimized_containers
+                if final_capacity > quantity and remainder == 0:
+                    optimized_containers = max(1, quantity // capacity)
+                    num_containers = optimized_containers
 
                 daily_demands[date_str].append({
                     'product_id': product_id,
@@ -357,7 +307,6 @@ class TransportPlanner:
                     'can_advance': bool(product.get('can_advance', 0)),
                     'is_advanced': False
                 })
-                print(f"    ✅ 需要追加: {date_str} に製品 {product.get('product_code', '不明')} x {num_containers} 容器 (計画数: {total_quantity - surplus})") # 直した
         # 日平均積載量を計算
         avg_floor_area = total_floor_area / len(working_dates) if working_dates else 0
                 # 非デフォルトトラック使用判定
