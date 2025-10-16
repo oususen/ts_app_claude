@@ -101,6 +101,15 @@ class TransportService:
                     'instruction_quantity': 'order_quantity'
                 })
         
+        if orders_df is not None and not orders_df.empty:
+            if 'delivery_date' in orders_df.columns:
+                orders_df['delivery_date'] = pd.to_datetime(orders_df['delivery_date']).dt.date
+
+            if use_calendar and self.calendar_repo:
+                orders_df = orders_df[
+                    orders_df['delivery_date'].apply(self.calendar_repo.is_working_day)
+                ].reset_index(drop=True)
+        
         if orders_df is None or orders_df.empty:
             return {
                 'daily_plans': {},

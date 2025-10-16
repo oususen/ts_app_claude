@@ -147,6 +147,17 @@ class TransportPlanner:
             current_date += timedelta(days=1)
         return working_dates
 
+    def _can_arrive_on_time(self, truck_info: Dict[str, Any], loading_date: date, delivery_date: date) -> bool:
+        """トラックが納期までに到着できるか判定"""
+        if delivery_date is None or loading_date is None:
+            return True
+        try:
+            offset = int(truck_info.get('arrival_day_offset', 0) or 0)
+        except (TypeError, ValueError):
+            offset = 0
+        arrival_date = loading_date + timedelta(days=offset)
+        return arrival_date <= delivery_date
+
     def _analyze_demand_and_decide_trucks(self, orders_df, product_map, container_map, 
                                          truck_map, working_dates) -> Tuple[Dict, bool]:
         """
@@ -530,6 +541,17 @@ class TransportPlanner:
             }
         # 製品を優先度順にソート
         sorted_demands = self._sort_demands_by_priority(demands, truck_states)
+        
+        # 利用可能なトラックをフィルタリング（納期に間に合わないトラックを除外）
+        filtered_truck_states = {}
+        for truck_id, state in truck_states.items():
+            truck_info = truck_map[truck_id]
+            arrival_day_offset = truck_info.get('arrival_day_offset', 0)
+            # 翌日到着のトラックは当日納期の製品には使用不可
+            if arrival_day_offset > 0:
+                state['unavailable_for_same_day'] = True
+            filtered_truck_states[truck_id] = state
+            
         # 各製品を適切なトラックに積載
         for demand in sorted_demands:
             loaded = False
@@ -546,9 +568,18 @@ class TransportPlanner:
                 # 候補トラックがない場合、積み残し
                 remaining_demands.append(demand)
                 continue
+            # 到着日に間に合うトラックのみ残す
+            demand_delivery_date = demand.get('delivery_date')
+            candidate_trucks = [
+                tid for tid in candidate_trucks
+                if self._can_arrive_on_time(truck_map[tid], current_date, demand_delivery_date)
+            ]
+            if not candidate_trucks:
+                remaining_demands.append(demand)
+                continue
             # 候補トラックを優先順位でソート
             candidate_trucks = self._sort_candidate_trucks(
-                candidate_trucks, demand, truck_states
+                candidate_trucks, demand, truck_states, truck_map, current_date
             )
             # トラックに積載を試みる
             remaining_demand = demand.copy()
@@ -558,15 +589,25 @@ class TransportPlanner:
                     # 全量積載完了
                     break
                 truck_state = truck_states[truck_id]
+                truck_info = truck_map[truck_id]
                 container_id = remaining_demand['container_id']
                 # この日付でこのトラックに積載できるか確認
                 truck_loading_dates = remaining_demand.get('truck_loading_dates', {})
                 if truck_id in truck_loading_dates:
                     correct_loading_date = truck_loading_dates[truck_id]
                     demand_loading_date = remaining_demand.get('loading_date')
+
                     # 積載日が一致しない場合はスキップ
                     if demand_loading_date and correct_loading_date != demand_loading_date:
                         continue
+                    loading_date_for_truck = correct_loading_date
+                else:
+                    loading_date_for_truck = current_date
+
+                demand_delivery_date = remaining_demand.get('delivery_date')
+                if not self._can_arrive_on_time(truck_info, loading_date_for_truck, demand_delivery_date):
+                    print(f"      ⚠️ トラック {truck_info.get('name', truck_id)} は納期 {demand_delivery_date} に間に合わないため積載不可")
+                    continue
                 # 同じ容器が既に積載されているか確認（段積み統合用）
                 same_container_items = [item for item in truck_state['loaded_items'] 
                                        if item['container_id'] == container_id]
@@ -912,10 +953,11 @@ class TransportPlanner:
             return (4, 0, product_code)
         return sorted(demands, key=get_priority)
 
-    def _sort_candidate_trucks(self, candidate_trucks, demand, truck_states):
+    def _sort_candidate_trucks(self, candidate_trucks, demand, truck_states, truck_map, current_date=None):
         """候補トラックを優先順位でソート
         優先順位：
-        1. 製品のused_truck_idsの順序（最優先）
+        0. 納期に間に合うトラック（最優先）
+        1. 製品のused_truck_idsの順序
         2. 優先積載製品に指定されている
         3. 同容器が既に積載されている
         4. 空き容量が大きい
@@ -923,13 +965,21 @@ class TransportPlanner:
         product_code = demand['product_code']
         container_id = demand['container_id']
         truck_ids = demand.get('truck_ids', [])
+        delivery_date = demand.get('delivery_date')
         def get_truck_priority(truck_id):
             truck_state = truck_states[truck_id]
-            # 1. 製品のused_truck_idsの順序を最優先（インデックスが小さいほど優先）
+            truck_info = truck_map[truck_id]
+            
+            # 0. 納期に間に合うトラックを最優先
+            if current_date and delivery_date:
+                if not self._can_arrive_on_time(truck_info, current_date, delivery_date):
+                    return (1, 9999, 1, 1, 0)  # 納期に間に合わないトラックは最低優先度
+            
+            # 1. 製品のused_truck_idsの順序を優先（インデックスが小さいほど優先）
             if truck_ids and truck_id in truck_ids:
                 truck_priority_index = truck_ids.index(truck_id)
             else:
-                truck_priority_index = 9999  # リストにない場合は最低優先度
+                truck_priority_index = 9999  # リストにない場合は低優先度
             # 2. 優先積載製品に指定されている
             if product_code in truck_state['priority_products']:
                 priority_product_flag = 0
@@ -1012,6 +1062,8 @@ class TransportPlanner:
                     continue
                 # このトラックの状態を確認（mm²をm²に変換）
                 truck_info = truck_map[truck_id]
+                if not self._can_arrive_on_time(truck_info, target_date, demand.get('delivery_date')):
+                    continue
                 truck_name = truck_info['name']
                 truck_floor_area = (truck_info['width'] * truck_info['depth']) / 1_000_000
                 # 既存のトラックプランを探す
@@ -1153,6 +1205,8 @@ class TransportPlanner:
                         continue
                     # 前日のこのトラックの状態を確認（mm²をm²に変換）
                     truck_info = truck_map[truck_id]
+                    if not self._can_arrive_on_time(truck_info, prev_date, demand.get('delivery_date')):
+                        continue
                     truck_floor_area = (truck_info['width'] * truck_info['depth']) / 1_000_000
                     # 既存のトラックプランを探す
                     target_truck_plan = None
@@ -1325,6 +1379,8 @@ class TransportPlanner:
                 # 各非デフォルトトラック候補を試す
                 for truck_id in candidate_trucks:
                     truck_info = truck_map[truck_id]
+                    if not self._can_arrive_on_time(truck_info, current_date, demand.get('delivery_date')):
+                        continue
                     truck_floor_area = (truck_info['width'] * truck_info['depth']) / 1_000_000
                     # 前日のこのトラックの状態を確認
                     target_truck_plan = None
