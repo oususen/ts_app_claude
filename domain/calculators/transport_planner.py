@@ -205,9 +205,16 @@ class TransportPlanner:
                     raw_capacity = 1
                 
                 capacity = max(1, int(raw_capacity))  # 1未満防止
-                quantity = int(order.get('order_quantity', 0))
-                
+                # 注文数量取得 計画進度の値を優先　計画数値が無ければ注文数値を使用、計画数値があれば計画進度を使う
+                # ですが、計画進度はマイナスです。それをプラスにする必要があります。計画進度の列名は“planned_progress_quantity”
+                quantity = -int(order.get('planned_progress_quantity', 0))
+                # if planned_progress_quantity > 0 or planned_progress_quantity < 0:
+                #     quantity = int(order.get('order_quantity', 0)) - planned_progress_quantity  # 計画進度を考慮
+                # else:
+                #     quantity = int(order.get('order_quantity', 0))
+
                 delivery_date_str = delivery_date.strftime('%Y-%m-%d') if delivery_date else '不明'
+                print(orders_df)
                 print(f"\n📊 製品{product.get('product_code', '不明')}の計画数計算:")
                 print(f"  ⚡ 基本情報:")
                 print(f"    - delivery_date（納期日）: {delivery_date_str}")
