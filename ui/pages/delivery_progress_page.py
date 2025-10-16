@@ -54,7 +54,7 @@ class DeliveryProgressPage:
         with col_f1:
             start_date = st.date_input(
                 "納期（開始）",
-                value=date.today() - timedelta(days=10),
+                value=date.today() - timedelta(days=1),
                 key="progress_start_date"
             )
         

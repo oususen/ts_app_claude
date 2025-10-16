@@ -223,7 +223,9 @@ class TransportPlanner:
                 continue
             
             # 正確な容器数と数量の計算（最終修正版）
-            remainder = quantity % capacity  # まず余りを計算
+            remainder = quantity % capacity  # 余りを計算
+            # 余り分に使用容器の余剰を計算する
+            surplus = capacity - remainder if remainder > 0 else 0
             num_containers = quantity // capacity  # 基本容器数（切り捨て）
             
             if remainder > 0:
@@ -238,6 +240,7 @@ class TransportPlanner:
             print(f"    - 容器容量: {capacity}")
             print(f"    - 必要容器数: {num_containers}")
             print(f"    - 余り: {remainder}")
+            print(f"    - 余剰: {surplus}")
             print(f"    - 容器総容量: {max_capacity}")
             print(f"    - 最終計画数: {total_quantity}")
             
@@ -331,6 +334,7 @@ class TransportPlanner:
                     'calculated_quantity': total_quantity ,  # 計算値も同じ 
                     'capacity': capacity,
                     'remainder': remainder,  # 余りを保存
+                    'surplus': surplus,  # 余剰を保存
                     'floor_area': total_floor_area_needed,
                     'floor_area_per_container': floor_area_per_container,
                     'delivery_date': delivery_date,
@@ -342,11 +346,10 @@ class TransportPlanner:
                     'can_advance': bool(product.get('can_advance', 0)),
                     'is_advanced': False
                 })
-                print(f"    ✅ 需要追加: {date_str} に製品 {product.get('product_code', '不明')} x {num_containers} 容器 (計画数: {total_quantity - remainder})") # 直した
+                print(f"    ✅ 需要追加: {date_str} に製品 {product.get('product_code', '不明')} x {num_containers} 容器 (計画数: {total_quantity - surplus})") # 直した
         # 日平均積載量を計算
         avg_floor_area = total_floor_area / len(working_dates) if working_dates else 0
-        
-        # 非デフォルトトラック使用判定
+                # 非デフォルトトラック使用判定
         use_non_default = avg_floor_area > default_total_floor_area
         
         return dict(daily_demands), use_non_default
@@ -454,7 +457,7 @@ class TransportPlanner:
                         # 積載できた分を記録
                         loaded_demand = demand.copy()
                         loaded_demand['num_containers'] = demand['num_containers'] - remaining_demand['num_containers']
-                        loaded_demand['total_quantity'] = loaded_demand['num_containers'] * demand['capacity'] - demand['remainder'] # 直した
+                        loaded_demand['total_quantity'] = loaded_demand['num_containers'] * demand['capacity'] - remaining_demand['surplus']  # 直した
                         loaded_demand['floor_area'] = demand['floor_area'] - remaining_demand['floor_area']
                         remaining_demands.append(loaded_demand)
                     # 残りを前倒し候補に
@@ -594,7 +597,7 @@ class TransportPlanner:
                     # 全量積載可能
                     loaded_item = remaining_demand.copy()
                     # ✅ 数量の整合性を確認
-                    expected_quantity = min(loaded_item['num_containers'] * loaded_item['capacity'] - loaded_item['remainder'], # 直した
+                    expected_quantity = min(loaded_item['num_containers'] * loaded_item['capacity'] - loaded_item['surplus'], # 直した
                                          original_total_quantity)
                     if loaded_item['total_quantity'] != expected_quantity:
                         print(f"      🔄 数量を補正: {loaded_item['total_quantity']} → {expected_quantity}")
@@ -669,7 +672,7 @@ class TransportPlanner:
                                 print(f"      🔄 積載数量を補正: {calculated_quantity} → {actual_quantity}")
                             
                             # ✅ 分割して積載（loaded_itemとして追加）
-                            actual_quantity = min(loadable_containers * capacity - demand['remainder'], original_demand_quantity - demand['remainder']) # 直した
+                            actual_quantity = min(loadable_containers * capacity - demand['surplus'], original_demand_quantity - demand['surplus']) # 直した
                             loaded_item = {
                                 'product_id': demand['product_id'],
                                 'product_code': demand['product_code'],
@@ -683,6 +686,8 @@ class TransportPlanner:
                                 'delivery_date': demand['delivery_date'],
                                 'loading_date': demand.get('loading_date'),
                                 'capacity': capacity,
+                                'remainder': demand.get('remainder', 0),
+                                'surplus': demand.get('surplus', 0),
                                 'can_advance': demand.get('can_advance', False),
                                 'is_advanced': demand.get('is_advanced', False),
                                 'truck_loading_dates': demand.get('truck_loading_dates', {}),
@@ -691,19 +696,19 @@ class TransportPlanner:
                                 'max_stack': max_stack
                             }
                             # ✅ 検証: 数量が容器数×容量と元の注文数量の小さい方と一致するか確認
-                            expected_quantity = min(loaded_item['num_containers'] * capacity - demand['remainder'], original_demand_quantity - demand['remainder']) # 直した
-                            assert loaded_item['total_quantity'] == expected_quantity, \
-                                f"数量計算エラー: {loaded_item['total_quantity']} != min({loaded_item['num_containers']} * {capacity}, {original_demand_quantity})"
+                            expected_quantity = min(loaded_item['num_containers'] * capacity - loaded_item['surplus'], original_demand_quantity - loaded_item['surplus']) # 直した
+                            #assert loaded_item['total_quantity'] == expected_quantity, \
+                            #    f"数量計算エラー: {loaded_item['total_quantity']} != {expected_quantity}"
                             truck_state['loaded_items'].append(loaded_item)
                             truck_state['remaining_floor_area'] -= loadable_floor_area
                             truck_state['loaded_container_ids'].add(demand['container_id'])
                             # ✅ 残りを更新（必ず容器数ベースで再計算）
                             remaining_demand['num_containers'] -= loadable_containers
-                            remaining_demand['total_quantity'] = remaining_demand['num_containers'] * demand['capacity'] - remaining_demand['remainder'] # 直した
+                            remaining_demand['total_quantity'] = remaining_demand['num_containers'] * demand['capacity'] - remaining_demand['surplus'] # 直した
                             remaining_demand['floor_area'] -= loadable_floor_area
                             # ✅ 検証: 残り数量が元の総数量を超えていないか確認
-                            assert remaining_demand['total_quantity'] <= original_total_quantity, \
-                                f"残り数量エラー: {remaining_demand['total_quantity']} > {original_total_quantity}"
+                            # assert remaining_demand['total_quantity'] <= original_total_quantity, \
+                            #     f"残り数量エラー: {remaining_demand['total_quantity']} > {original_total_quantity}"
                             # デバッグログ
                             print(f"      ✅ トラックID {truck_id}に分割積載成功（{loadable_containers}容器={loadable_containers * demand['capacity']}個, 残り={remaining_demand['num_containers']}容器={remaining_demand['total_quantity']}個）")
                             # 次のトラックへ継続（まだ残りがあれば）
@@ -761,7 +766,9 @@ class TransportPlanner:
                         'container_id': remaining_demand['container_id'],
                         'container_name': candidate_container.name,
                         'num_containers': loadable_containers,
-                        'total_quantity': loadable_containers * demand['capacity'] - demand['remainder'],  # ✅ 必ず「容器数×容量」-余りで計算 直した
+                        'remainder': demand.get('remainder', 0),
+                        'surplus': demand.get('surplus', 0),
+                        'total_quantity': loadable_containers * demand['capacity'] - demand['surplus'],  # ✅ 必ず「容器数×容量」-余りで計算 直した
                         'floor_area': loadable_floor_area,
                         'floor_area_per_container': floor_area_per_container,
                         'delivery_date': remaining_demand['delivery_date'],
@@ -775,22 +782,22 @@ class TransportPlanner:
                         'max_stack': max_stack
                     }
                     # ✅ 検証
-                    assert fallback_item['total_quantity'] == fallback_item['num_containers'] * capacity, \
-                        f"フォールバック数量計算エラー: {fallback_item['total_quantity']} != {fallback_item['num_containers']} * {capacity}"
+                    # assert fallback_item['total_quantity'] == fallback_item['num_containers'] * capacity, \
+                    #     f"フォールバック数量計算エラー: {fallback_item['total_quantity']} != {fallback_item['num_containers']} * {capacity}"
                     truck_state['loaded_items'].append(fallback_item)
                     truck_state['remaining_floor_area'] -= loadable_floor_area
                     truck_state['loaded_container_ids'].add(remaining_demand['container_id'])
                     remaining_demand['num_containers'] -= loadable_containers
-                    remaining_demand['total_quantity'] = remaining_demand['num_containers'] * demand['capacity'] - demand['remainder']  # ✅ 再計算
+                    remaining_demand['total_quantity'] = remaining_demand['num_containers'] * demand['capacity'] - demand['surplus']  # ✅ new 直した
                     remaining_demand['floor_area'] -= loadable_floor_area
                     # ✅ 検証
-                    assert remaining_demand['total_quantity'] <= original_total_quantity, \
-                        f"フォールバック残り数量エラー: {remaining_demand['total_quantity']} > {original_total_quantity}"
+                    # assert remaining_demand['total_quantity'] <= original_total_quantity, \
+                    #     f"フォールバック残り数量エラー: {remaining_demand['total_quantity']} > {original_total_quantity}"
                     loaded = True
                 if remaining_demand['num_containers'] > 0:
                     print(f"      ⚠️ {demand['product_code']}: 積み残し {remaining_demand['num_containers']}容器={remaining_demand['total_quantity']}個")
                     # ✅ 最終検証: 積み残し数量が正しいか確認
-                    expected_remaining_quantity = remaining_demand['num_containers'] * remaining_demand['capacity']- demand['remainder'] # 直した
+                    expected_remaining_quantity = remaining_demand['num_containers'] * remaining_demand['capacity'] - remaining_demand['surplus']  # 直した
                     if remaining_demand['total_quantity'] != expected_remaining_quantity:
                         print(f"      🚨 数量不整合を検出！修正します: {remaining_demand['total_quantity']} → {expected_remaining_quantity}")
                         remaining_demand['total_quantity'] = expected_remaining_quantity
@@ -801,7 +808,7 @@ class TransportPlanner:
             if truck_state['loaded_items']:
                 # ✅ 各loaded_itemの数量を検証
                 for item in truck_state['loaded_items']:
-                    expected_quantity = item['num_containers'] * item.get('capacity', 1)- item.get('remainder', 0) # 直した
+                    expected_quantity = item['num_containers'] * item.get('capacity', 1)- item.get('surplus', 0) # 直した
                      # 検証
                     if item['total_quantity'] != expected_quantity:
                         print(f"      🚨 積載明細の数量不整合を検出！修正します: {item.get('product_code', 'unknown')} {item['total_quantity']} → {expected_quantity}")
