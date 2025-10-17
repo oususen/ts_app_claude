@@ -135,26 +135,13 @@ class TransportService:
                     remaining_base = pd.Series(0, index=orders_df.index)
                 orders_df['__remaining_qty'] = remaining_base.clip(lower=0)
 
-            if 'planned_progress_quantity' in orders_df.columns:
-                orders_df['__progress_deficit'] = orders_df['planned_progress_quantity'].fillna(0).apply(
-                    lambda x: max(0, -x)
-                )
-            else:
-                orders_df['__progress_deficit'] = 0
-
-            # 計画数量は基本的に残数量。計画進度がマイナスの場合は不足分を優先しつつ残数量を上限とする
+            # 計画進捗に依存せず残数量のみを計画数量とする
             orders_df['planning_quantity'] = orders_df['__remaining_qty']
-            backlog_mask = orders_df['__progress_deficit'] > 0
-            if backlog_mask.any():
-                orders_df.loc[backlog_mask, 'planning_quantity'] = orders_df.loc[backlog_mask].apply(
-                    lambda row: min(row['__remaining_qty'], row['__progress_deficit']) if row['__remaining_qty'] > 0 else 0,
-                    axis=1
-                )
 
             # 残/不足ともに0の場合はスキップ
             orders_df = orders_df[orders_df['planning_quantity'] > 0].reset_index(drop=True)
 
-            orders_df.drop(columns=['__remaining_qty', '__progress_deficit'], inplace=True, errors='ignore')
+            orders_df.drop(columns=['__remaining_qty'], inplace=True, errors='ignore')
 
         if orders_df is None or orders_df.empty:
             return {
@@ -450,6 +437,8 @@ class TransportService:
         orders['product_id'] = pd.to_numeric(orders['product_id'], errors='coerce')
         orders = orders.dropna(subset=['product_id', 'delivery_date'])
         orders['product_id'] = orders['product_id'].astype(int)
+        if 'product_name' not in orders.columns:
+            orders['product_name'] = ''
 
         planned_rows = []
         for plan in plan_result.get('daily_plans', {}).values():
