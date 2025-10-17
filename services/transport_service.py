@@ -1,5 +1,5 @@
 # app/services/transport_service.py（カレンダー統合版）
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import date, timedelta
 from repository.transport_repository import TransportRepository
 from repository.production_repository import ProductionRepository
@@ -203,6 +203,10 @@ class TransportService:
         """全積載計画のリスト取得"""
         return self.loading_plan_repo.get_all_plans()
     
+    def get_loading_plan_details_by_date(self, loading_date: date, truck_id: int = None) -> List[Dict[str, Any]]:
+        """指定日の積載計画明細を取得"""
+        return self.loading_plan_repo.get_plan_details_by_date_and_truck(loading_date, truck_id)
+    
     def delete_loading_plan(self, plan_id: int) -> bool:
         """積載計画を削除"""
         return self.loading_plan_repo.delete_loading_plan(plan_id)
@@ -210,6 +214,10 @@ class TransportService:
     def get_delivery_progress(self, start_date: date = None, end_date: date = None) -> pd.DataFrame:
         """納入進度取得"""
         return self.delivery_progress_repo.get_delivery_progress(start_date, end_date)
+    
+    def get_delivery_progress_by_product_and_date(self, product_id: int, delivery_date: date) -> Optional[Dict[str, Any]]:
+        """製品と納期日で納入進度を取得"""
+        return self.delivery_progress_repo.get_progress_by_product_and_date(product_id, delivery_date)
     
     def create_delivery_progress(self, progress_data: Dict[str, Any]) -> int:
         """納入進度を新規作成"""

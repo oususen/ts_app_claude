@@ -1,7 +1,8 @@
 # app/ui/pages/delivery_progress_page.py
 import streamlit as st
 import pandas as pd
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
+from typing import Dict, Optional, Any
 
 class DeliveryProgressPage:
     """納入進度管理ページ"""
@@ -14,13 +15,15 @@ class DeliveryProgressPage:
         st.title("📋 納入進度管理")
         st.write("受注から出荷までの進捗を管理します。")
         
-        tab1, tab2, tab3 = st.tabs(["📊 進度一覧", "➕ 新規登録", "📦 出荷実績"])
+        tab1, tab2, tab3, tab4 = st.tabs(["📊 進度一覧", "✅ 実績登録", "➕ 新規登録", "📦 出荷実績"])
         
         with tab1:
             self._show_progress_list()
         with tab2:
-            self._show_progress_registration()
+            self._show_actual_registration()
         with tab3:
+            self._show_progress_registration()
+        with tab4:
             self._show_shipment_records()
     
     def _show_progress_list(self):
@@ -709,6 +712,229 @@ class DeliveryProgressPage:
                         st.rerun()
                     else:
                         st.error("納入進度登録に失敗しました")
+    
+    def _show_actual_registration(self):
+        """実績登録"""
+        st.header("✅ 積込実績登録")
+        
+        try:
+            trucks_df = self.service.get_trucks()
+        except Exception as e:
+            st.error(f"トラック情報の取得に失敗しました: {e}")
+            return
+        
+        if trucks_df is None or trucks_df.empty:
+            st.info("トラックマスタが空です。先にトラックを登録してください。")
+            return
+        
+        truck_options = {
+            str(row["name"]): int(row["id"])
+            for _, row in trucks_df.iterrows()
+            if pd.notna(row.get("name")) and pd.notna(row.get("id"))
+        }
+        
+        if not truck_options:
+            st.info("選択可能なトラックがありません。")
+            return
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            loading_date = st.date_input(
+                "積込日",
+                value=date.today(),
+                key="actual_loading_date"
+            )
+        with col2:
+            truck_name = st.selectbox(
+                "トラック",
+                options=list(truck_options.keys()),
+                key="actual_truck_select"
+            )
+        
+        selected_truck_id = truck_options.get(truck_name)
+        if not selected_truck_id:
+            st.warning("トラックを選択してください。")
+            return
+        
+        try:
+            plan_items = self.service.get_loading_plan_details_by_date(loading_date, selected_truck_id)
+        except Exception as e:
+            st.error(f"積載計画の取得に失敗しました: {e}")
+            return
+        
+        if not plan_items:
+            st.info("指定条件に該当する積載計画がありません。")
+            return
+        
+        plan_df = pd.DataFrame(plan_items)
+        if plan_df.empty or 'id' not in plan_df.columns:
+            st.error("積載計画明細の形式が不正です。")
+            return
+        
+        plan_df = plan_df.set_index('id')
+        
+        if 'delivery_date' in plan_df.columns:
+            plan_df['delivery_date'] = pd.to_datetime(
+                plan_df['delivery_date'], errors='coerce'
+            ).dt.date
+        plan_df['delivery_date'] = plan_df['delivery_date'].fillna(loading_date)
+        
+        if 'trip_number' in plan_df.columns:
+            plan_df['trip_number'] = pd.to_numeric(plan_df['trip_number'], errors='coerce').fillna(1).astype(int)
+        else:
+            plan_df['trip_number'] = 1
+        
+        plan_df['num_containers'] = pd.to_numeric(plan_df.get('num_containers', 0), errors='coerce').fillna(0).astype(int)
+        plan_df['total_quantity'] = pd.to_numeric(plan_df.get('total_quantity', 0), errors='coerce').fillna(0).astype(int)
+        plan_df['planned_quantity'] = plan_df['total_quantity']
+        
+        progress_cache: Dict[int, Optional[Dict[str, Any]]] = {}
+        missing_progress: list[str] = []
+        
+        plan_df['current_shipped'] = None
+        plan_df['current_status'] = None
+        
+        for detail_id, row in plan_df.iterrows():
+            product_id = row.get('product_id')
+            try:
+                product_id_int = int(product_id)
+            except (TypeError, ValueError):
+                progress_cache[detail_id] = None
+                missing_progress.append(f"{row.get('product_code', '') or '不明'}")
+                continue
+            
+            delivery_value = row.get('delivery_date') or loading_date
+            if isinstance(delivery_value, pd.Timestamp):
+                delivery_value = delivery_value.to_pydatetime().date()
+            elif isinstance(delivery_value, datetime):
+                delivery_value = delivery_value.date()
+            elif isinstance(delivery_value, str):
+                try:
+                    delivery_value = datetime.strptime(delivery_value, "%Y-%m-%d").date()
+                except ValueError:
+                    delivery_value = loading_date
+            
+            plan_df.at[detail_id, 'delivery_date'] = delivery_value
+            
+            try:
+                progress = self.service.get_delivery_progress_by_product_and_date(product_id_int, delivery_value)
+            except Exception as e:
+                st.warning(f"納入進度の取得に失敗しました（製品ID:{product_id_int}）: {e}")
+                progress = None
+            
+            progress_cache[detail_id] = progress
+            
+            if progress:
+                shipped_val = progress.get('shipped_quantity')
+                plan_df.at[detail_id, 'current_shipped'] = int(shipped_val) if shipped_val is not None else 0
+                plan_df.at[detail_id, 'current_status'] = progress.get('status')
+            else:
+                plan_df.at[detail_id, 'current_shipped'] = None
+                plan_df.at[detail_id, 'current_status'] = None
+                missing_progress.append(f"{row.get('product_code', '') or '不明'}（{delivery_value}）")
+        
+        product_codes = plan_df.get('product_code', pd.Series('', index=plan_df.index))
+        product_names = plan_df.get('product_name', pd.Series('', index=plan_df.index))
+        
+        display_df = pd.DataFrame(
+            {
+                "積込順": plan_df['trip_number'],
+                "製品コード": product_codes,
+                "製品名": product_names,
+                "納入日": plan_df['delivery_date'],
+                "計画数量": plan_df['planned_quantity'],
+                "既出荷数量": plan_df['current_shipped'].fillna(0).astype(int),
+                "実績数量": plan_df['planned_quantity']
+            },
+            index=plan_df.index
+        )
+        display_df.index.name = "detail_id"
+        
+        st.caption("計画数量をベースに実績数量を入力してください。不要な行は0のままにします。")
+        if missing_progress:
+            st.warning("納入進度が見つからない明細があります: " + "、".join(sorted(set(missing_progress))))
+        
+        form_key = f"actual_registration_form_{selected_truck_id}_{loading_date.isoformat()}"
+        with st.form(form_key):
+            edited_df = st.data_editor(
+                display_df,
+                key=f"actual_editor_{selected_truck_id}_{loading_date.isoformat()}",
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "積込順": st.column_config.NumberColumn("積込順", disabled=True),
+                    "製品コード": st.column_config.TextColumn("製品コード", disabled=True),
+                    "製品名": st.column_config.TextColumn("製品名", disabled=True),
+                    "納入日": st.column_config.DateColumn("納入日", disabled=True, format="YYYY-MM-DD"),
+                    "計画数量": st.column_config.NumberColumn("計画数量", disabled=True),
+                    "既出荷数量": st.column_config.NumberColumn("既出荷数量", disabled=True),
+                    "実績数量": st.column_config.NumberColumn("実績数量", min_value=0, step=1)
+                }
+            )
+            
+            driver_name = st.text_input("ドライバー名", key=f"actual_driver_{selected_truck_id}")
+            notes = st.text_area(
+                "備考（必要に応じて入力）",
+                key=f"actual_notes_{selected_truck_id}",
+                placeholder=f"例: {truck_name} {loading_date} 積込"
+            )
+            
+            submitted = st.form_submit_button("実績を登録", type="primary")
+            
+            if submitted:
+                if edited_df.empty:
+                    st.info("登録対象の明細がありません。")
+                    return
+                
+                registered = 0
+                failed_entries: list[str] = []
+                missing_entries: list[str] = []
+                
+                for detail_id, row in edited_df.iterrows():
+                    try:
+                        detail_id_int = int(detail_id)
+                    except (TypeError, ValueError):
+                        continue
+                    
+                    quantity_value = pd.to_numeric(row.get("実績数量"), errors='coerce')
+                    if pd.isna(quantity_value) or quantity_value <= 0:
+                        continue
+                    
+                    progress = progress_cache.get(detail_id_int)
+                    plan_row = plan_df.loc[detail_id_int]
+                    
+                    if not progress:
+                        missing_entries.append(f"{plan_row.get('product_code', '') or '不明'}（{plan_row.get('delivery_date')}）")
+                        continue
+                    
+                    shipment_data = {
+                        'progress_id': progress['id'],
+                        'truck_id': selected_truck_id,
+                        'shipment_date': loading_date,
+                        'shipped_quantity': int(quantity_value),
+                        'container_id': plan_row.get('container_id'),
+                        'num_containers': plan_row.get('num_containers'),
+                        'driver_name': driver_name,
+                        'notes': notes
+                    }
+                    
+                    success = self.service.create_shipment_record(shipment_data)
+                    if success:
+                        registered += 1
+                    else:
+                        failed_entries.append(f"{plan_row.get('product_code', '') or '不明'}（{plan_row.get('delivery_date')}）")
+                
+                if registered:
+                    st.success(f"{registered} 件の実績を登録しました。")
+                    st.balloons()
+                if failed_entries:
+                    st.error("登録に失敗した明細: " + "、".join(failed_entries))
+                if missing_entries:
+                    st.warning("納入進度が見つからず登録できなかった明細: " + "、".join(missing_entries))
+                
+                if registered and not failed_entries:
+                    st.info("他のタブで最新の実績を確認できます。")
+                    st.rerun()
     
     def _show_shipment_records(self):
         """出荷実績表示"""

@@ -1,7 +1,7 @@
 # app/repository/loading_plan_repository.py
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import text
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import date
 from .database_manager import DatabaseManager
 
@@ -469,6 +469,65 @@ class LoadingPlanRepository:
             
         except SQLAlchemyError as e:
             print(f"積載計画リスト取得エラー: {e}")
+            return []
+        finally:
+            session.close()
+
+    def get_plan_details_by_date_and_truck(self, loading_date: date, truck_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """指定日の積載計画明細をトラック単位で取得"""
+        session = self.db.get_session()
+
+        try:
+            latest_plan = session.execute(
+                text("""
+                    SELECT id
+                    FROM loading_plan_header
+                    ORDER BY id DESC
+                    LIMIT 1
+                """)
+            ).fetchone()
+
+            if not latest_plan:
+                return []
+
+            plan_id = latest_plan[0]
+            params = {
+                'plan_id': plan_id,
+                'loading_date': loading_date.strftime('%Y-%m-%d')
+            }
+
+            detail_sql = """
+                SELECT 
+                    id,
+                    plan_id,
+                    loading_date,
+                    truck_id,
+                    truck_name,
+                    trip_number,
+                    product_id,
+                    product_code,
+                    product_name,
+                    container_id,
+                    num_containers,
+                    total_quantity,
+                    delivery_date,
+                    original_date
+                FROM loading_plan_detail
+                WHERE plan_id = :plan_id
+                  AND DATE(loading_date) = :loading_date
+            """
+
+            if truck_id:
+                detail_sql += " AND truck_id = :truck_id"
+                params['truck_id'] = truck_id
+
+            detail_sql += " ORDER BY truck_id, trip_number, id"
+
+            results = session.execute(text(detail_sql), params).fetchall()
+            return [dict(row._mapping) for row in results]
+
+        except SQLAlchemyError as e:
+            print(f"積載計画明細取得エラー: {e}")
             return []
         finally:
             session.close()

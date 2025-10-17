@@ -1,7 +1,7 @@
 # app/repository/delivery_progress_repository.py
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import text
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import date, datetime, time
 import pandas as pd
 from .database_manager import DatabaseManager
@@ -111,6 +111,35 @@ class DeliveryProgressRepository:
         except SQLAlchemyError as e:
             print(f"納入進度取得エラー: {e}")
             return pd.DataFrame()
+        finally:
+            session.close()
+
+    def get_progress_by_product_and_date(self, product_id: int, delivery_date: date) -> Optional[Dict[str, Any]]:
+        """製品と納期日で納入進度を1件取得"""
+        session = self.db.get_session()
+
+        try:
+            query = text("""
+                SELECT *
+                FROM delivery_progress
+                WHERE product_id = :product_id
+                  AND DATE(delivery_date) = :delivery_date
+                ORDER BY delivery_date, id
+                LIMIT 1
+            """)
+
+            result = session.execute(query, {
+                'product_id': product_id,
+                'delivery_date': delivery_date
+            }).fetchone()
+
+            if result:
+                return dict(result._mapping)
+            return None
+
+        except SQLAlchemyError as e:
+            print(f"delivery_progress取得エラー: {e}")
+            return None
         finally:
             session.close()
     
