@@ -530,6 +530,16 @@ class TransportPlanner:
             candidate_trucks = self._sort_candidate_trucks(
                 candidate_trucks, demand, truck_states, truck_map, current_date
             )
+            
+            # デバッグ出力 - 1容器のケースを追跡
+            if demand.get('num_containers') == 1 and demand.get('product_code') == 'V053904703':
+                print(f"\n🔍 デバッグ: トラック選択プロセス")
+                print(f"  製品: {demand.get('product_code')} ({demand.get('product_name', '')})")
+                print(f"  納期: {demand.get('delivery_date')}")
+                print(f"  現在の日付: {current_date}")
+                print(f"  ソート後の候補トラック順序: {candidate_trucks}")
+                print(f"  allowed_truck_ids: {allowed_truck_ids}")
+            
             # トラックに積載を試みる
             remaining_demand = demand.copy()
             # ✅ 改善: 複数トラックへの分割積載を積極的に試みる
@@ -918,6 +928,15 @@ class TransportPlanner:
         def get_truck_priority(truck_id):
             truck_state = truck_states[truck_id]
             truck_info = truck_map[truck_id]
+            
+            # デバッグ出力 - 1容器のケースを追跡
+            if product_code == 'V053904703' and container_id and truck_state['loaded_items'] and \
+               any(item.get('num_containers') == 1 for item in truck_state['loaded_items']):
+                print(f"\n🔍 デバッグ: トラック{truck_id}の優先度計算")
+                print(f"  トラック名: {truck_info.get('name')}")
+                print(f"  優先製品: {truck_state['priority_products']}")
+                print(f"  既存の同容器: {container_id in truck_state['loaded_container_ids']}")
+                print(f"  残り容量: {truck_state['remaining_floor_area']}m²")
             
             # 0. 納期に間に合うトラックを最優先
             if current_date and delivery_date:
@@ -1327,8 +1346,18 @@ class TransportPlanner:
                     continue
                 # 各非デフォルトトラック候補を試す
                 for truck_id in candidate_trucks:
+                    # デバッグ出力 - 1容器のケースを追跡
+                    if demand.get('num_containers') == 1 and demand.get('product_code') == 'V053904703':
+                        print(f"\n🔍 デバッグ: 非デフォルトトラック {truck_id} の検証")
+                        print(f"  製品: {demand.get('product_code')} ({demand.get('product_name', '')})")
+                        print(f"  容器数: {demand.get('num_containers')}")
+                        print(f"  納期: {demand.get('delivery_date')}")
+                        print(f"  current_date: {current_date}")
+
                     truck_info = truck_map[truck_id]
                     if not self._can_arrive_on_time(truck_info, current_date, demand.get('delivery_date')):
+                        if demand.get('num_containers') == 1 and demand.get('product_code') == 'V053904703':
+                            print(f"  ⚠️ 納期に間に合わないためスキップ")
                         continue
                     truck_floor_area = (truck_info['width'] * truck_info['depth']) / 1_000_000
                     # 前日のこのトラックの状態を確認
