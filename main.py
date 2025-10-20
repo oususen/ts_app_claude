@@ -15,8 +15,7 @@ from config import APP_CONFIG
 from ui.pages.calendar_page import CalendarPage
 
 class ProductionPlanningApp:
-    """生産計画アプリケーション - メイン制御クラス"""
-    
+    """生産計画アプリケーション - メイン制御クラス""" 
     def __init__(self):
         # データベース接続
         self.db = DatabaseManager()
